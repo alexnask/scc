@@ -2,6 +2,8 @@
 #include <ctype.h>
 #include <string.h>
 
+// TODO: Make errors non fatal, return malformed tokens.
+
 // Newlines != whitespace
 static bool is_whitespace(const char c) {
     return c == ' ' || c == '\t';
@@ -91,7 +93,7 @@ recognize_token:
                 INCR_CHAR;
                 token->kind = TOK_COMMENT;
 
-                while (PEEK_CHAR != '\n' && PEEK_CHAR != '\0') {
+                while (PEEK_CHAR != '\n' && PEEK_CHAR != '\r' && PEEK_CHAR != '\0') {
                     INCR_CHAR;
                 }
 

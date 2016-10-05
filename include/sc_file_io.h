@@ -24,7 +24,7 @@ typedef struct sc_path_table {
 } sc_path_table;
 
 void path_table_init(sc_path_table *table);
-// Caller needs to take chare of path's memory (does not use allocator to copy over)
+// Caller needs to take care of path's memory (does not use allocator to copy over)
 void path_table_add(sc_path_table *table, const char *path);
 void path_table_destroy(sc_path_table *table);
 
@@ -69,5 +69,7 @@ void file_cache_unload(sc_file_cache *cache, const char *abs_path);
 void file_cache_destroy(sc_file_cache *cache);
 
 sc_file *handle_to_file(sc_file_cache_handle handle);
+
+void get_relative_path_from_file(const char *absolute_path, const char *relative_path, char *out, size_t out_max_len);
 
 #endif

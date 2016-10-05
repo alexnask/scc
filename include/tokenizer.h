@@ -75,6 +75,8 @@ typedef enum token_kind {
     TOK_EOF
 } token_kind;
 
+// TODO: Multiple types of token_sources
+// (file, macro)
 typedef struct token_source {
     sc_file_cache_handle source_file;
     long int offset;
@@ -82,6 +84,9 @@ typedef struct token_source {
 
     size_t line;
     size_t column;
+
+    // Set by #line
+    const char *path_overwrite;
 } token_source;
 
 typedef struct token {

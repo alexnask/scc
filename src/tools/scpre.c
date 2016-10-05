@@ -1,37 +1,35 @@
 // The SCC preprocessor as an executable.
-#include <tokenizer.h>
+#include <preprocessor.h>
 
 #include <stdio.h>
+
+// TODO: add output file.
 
 int main(int argc, char *argv[]) {
     // Just assume first argument passed is a file for now.
     if (argc < 2) {
         printf("No file supplied to scpre.\n");
-        printf("Usage: %s <file>\n", argv[0]);
+        printf("Usage: %s <input file>\n", argv[0]);
         return 0;
     }
 
     char *file_path = argv[1];
 
-    tokenizer_state state;
-    sc_file_cache file_cache;
+    token_vector translation_unit;
+    token_vector_init(&translation_unit);
 
-    file_cache_init(&file_cache, mallocator());
-    sc_file_cache_handle handle = file_cache_load(&file_cache, file_path);
-    if (!handle.cache) {
-        sc_error(true, "Could not load file %s.\nAre you sure it exists?", file_path);
-    }
+    sc_path_table default_paths;
+    path_table_init(&default_paths);
 
-    tokenizer_state_init(&state, handle);
+    init_preprocessor(&default_paths, mallocator());
 
-    sc_enter_stage("tokenizing");
+    preprocess(file_path, &translation_unit);
 
-    token current;
-    do {
-        next_token(&current, &state);
-    } while (current.kind != TOK_EOF);
+    sc_debug("Preprocessor returned translation unit %d tokens long.", translation_unit.size);
 
-    file_cache_destroy(&file_cache);
+    sc_enter_stage("cleaning up");
+    token_vector_destroy(&translation_unit);
+    release_preprocessor();
 
     return 0;
 }

@@ -1,15 +1,15 @@
 #include <sc_file_io.h>
 #include <string.h>
 
-// Combines an absolute and a relative path
-// Returns bytes written to 'out' (including null terminator if present)
-size_t path_abs_rel_combine(const char *abs_path, size_t abs_len, const char *rel_path, size_t rel_len, char *out, size_t out_max_len) {
 #ifdef _WIN32
     const char separator = '\\';
 #else
     const char separator = '/';
 #endif
 
+// Combines an absolute and a relative path
+// Returns bytes written to 'out' (including null terminator if present)
+size_t path_abs_rel_combine(const char *abs_path, size_t abs_len, const char *rel_path, size_t rel_len, char *out, size_t out_max_len) {
     size_t write_size = out_max_len < abs_len ? out_max_len : abs_len;
     size_t written = write_size;
     // We do not use the _s (safe) version since we are doing the checking ourselves
@@ -154,8 +154,14 @@ sc_file_cache_handle file_cache_load(sc_file_cache *cache, const char *abs_path)
         cache->files = realloc(cache->files, cache->capacity * sizeof(sc_file *));
     }
 
-    file_load(&cache->files[cache->size++], abs_path, cache->alloc);
+    // We will use our allocator to keep the absolute path.
+    size_t path_len = strlen(abs_path);
+    char *new_abs_path = sc_alloc(cache->alloc, path_len + 1);
+    strncpy(new_abs_path, abs_path, path_len + 1);
+
+    file_load(&cache->files[cache->size++], new_abs_path, cache->alloc);
     if (!cache->files[cache->size - 1].contents) {
+        cache->size--;
         // File does not exist.
         return (sc_file_cache_handle) { .cache = NULL, .index = 0 };
     }
@@ -169,6 +175,7 @@ void file_cache_unload(sc_file_cache *cache, const char *abs_path) {
         // Look up wether we already own this file.
         if (!strcmp(cache->files[i].abs_path, abs_path)) {
             // Already have it!
+            sc_free(cache->alloc, cache->files[i].abs_path);
             file_destroy(&cache->files[i]);
         }
     }
@@ -177,6 +184,7 @@ void file_cache_unload(sc_file_cache *cache, const char *abs_path) {
 void file_cache_destroy(sc_file_cache *cache) {
     // Destroy all our files
     for (size_t i = 0; i < cache->size; ++i) {
+        sc_free(cache->alloc, cache->files[i].abs_path);
         file_destroy(&cache->files[i]);
     }
 
@@ -189,4 +197,30 @@ void file_cache_destroy(sc_file_cache *cache) {
 
 sc_file *handle_to_file(sc_file_cache_handle handle) {
     return &handle.cache->files[handle.index];
+}
+
+// TODO: WE NEED SEPARATOR CONVERSION TO '/' (for win32)
+
+void get_relative_path_from_file(const char *absolute_path, const char *relative_path, char *out, size_t out_max_len) {
+    // Right
+    // Let's copy up to our last directory separator.
+    // (actually, let's find it first :P)
+    size_t abs_len = strlen(absolute_path), rel_len = strlen(relative_path);
+    size_t last_sep_index = 0;
+    for (size_t i = 0; i < abs_len; i++) {
+        if (absolute_path[i] == separator) {
+            last_sep_index = i;
+        }
+    }
+
+    // Copy up to there (including that character).
+    // "abc/" -> lsi = 3
+    size_t written = last_sep_index + 1 < out_max_len ? last_sep_index + 1 : out_max_len;
+    strncpy(out, absolute_path, written);
+
+    if (written == out_max_len) return;
+
+    out += written;
+    written = rel_len + 1 > (out_max_len - written) ? out_max_len - written : rel_len + 1;
+    strncpy(out, relative_path, written);
 }
