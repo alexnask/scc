@@ -1,10 +1,5 @@
 #include <sc_file_io.h>
-#define __STDC_WANT_LIB_EXT1__ 1
 #include <string.h>
-
-#ifndef __STDC_LIB_EXT1__
-
-#endif
 
 // Combines an absolute and a relative path
 // Returns bytes written to 'out' (including null terminator if present)
