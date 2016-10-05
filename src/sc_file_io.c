@@ -9,36 +9,37 @@
 
 // Combines an absolute and a relative path
 // Returns bytes written to 'out' (including null terminator if present)
-size_t path_abs_rel_combine(const char *abs_path, size_t abs_len, const char *rel_path, size_t rel_len, char *out, size_t out_max_len) {
+size_t path_abs_rel_combine(const char *abs_path, const char *rel_path, size_t rel_len, char *out, size_t out_max_len) {
+    size_t abs_len = strlen(abs_path);
     size_t write_size = out_max_len < abs_len ? out_max_len : abs_len;
     size_t written = write_size;
     // We do not use the _s (safe) version since we are doing the checking ourselves
     strncpy(out, abs_path, write_size);
 
     // We wrote as much as we can, get out.
-    if (write_size == out_max_len) {
+    if (written == out_max_len) {
         return written;
     }
 
-    // Skip past the absolute path.
-    out += write_size;
-
     if (abs_path[abs_len - 1] != separator) {
         // Add separator
-        out[abs_len + 1] = separator;
+        out[abs_len] = separator;
         written++;
-        out++;
     }
 
+    // Skip past the absolute path.
+    out += written;
+
     // Maximum write size.
-    write_size = out_max_len - abs_len;
+    write_size = out_max_len - written;
 
     // We can fit the relative length + null terminator
     if (rel_len + 1 < write_size) {
         write_size = rel_len + 1;
     }
 
-    strncpy(out, rel_path, write_size);
+    strncpy(out, rel_path, write_size - 1);
+    out[write_size] = '\0';
     written += write_size;
     return written;
 }
@@ -77,9 +78,10 @@ bool path_table_lookup(sc_path_table *table, const char *relative_path, char *ab
 
         // size_t path_abs_rel_combine(const char *abs_path, size_t abs_len, const char *rel_path, size_t rel_len, char *out, size_t out_max_len)
         char combined_path[FILENAME_MAX];
-        size_t combined_len = path_abs_rel_combine(current_path, strlen(current_path), relative_path, rel_len, combined_path, FILENAME_MAX);
+        size_t combined_len = path_abs_rel_combine(current_path, relative_path, rel_len, combined_path, FILENAME_MAX);
 
-        assert(combined_len <= FILENAME_MAX && combined_path[combined_len] == '\0');
+        assert(combined_len <= FILENAME_MAX);
+        assert(combined_path[combined_len] == '\0');
 
         // Check if that file exists
         FILE *fhandle = fopen(combined_path, "r");

@@ -14,7 +14,7 @@
 
 // Combines an absolute and a relative path
 // Returns bytes written to 'out' (including null terminator if present)
-size_t path_abs_rel_combine(const char *abs_path, size_t abs_len, const char *rel_path, size_t rel_len, char *out, size_t out_max_len);
+size_t path_abs_rel_combine(const char *abs_path, const char *rel_path, size_t rel_len, char *out, size_t out_max_len);
 
 // We sue malloc/realloc/free (we could use sc_allocator if we add realloc capabilities)
 typedef struct sc_path_table {

@@ -20,6 +20,7 @@ int main(int argc, char *argv[]) {
 
     sc_path_table default_paths;
     path_table_init(&default_paths);
+    path_table_add(&default_paths, "include");
 
     init_preprocessor(&default_paths, mallocator());
 

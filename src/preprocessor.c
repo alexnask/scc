@@ -148,6 +148,47 @@ typedef struct preprocessing_state {
     const char *path_overwrite;
 } preprocessing_state;
 
+static bool concatenate_path_tokens(token *current, tokenizer_state *tok_state, char *out, size_t max_out_len) {
+    assert(current->kind == TOK_LESSTHAN);
+
+    // So, we need to read tokens until a TOK_GREATERTHAN or a newline.
+    // If we get to a newline first, we error out by returning false.
+    // We concatenate the contents of our tokens on the way there.
+    // Comment tokens are treated like a single whitespace character.
+    next_token(current, tok_state);
+
+    size_t written = 0;
+
+    #define CHECK_WRITE(LEN) if (written + LEN >= max_out_len) { return false; }
+
+    while (current->kind != TOK_GREATERTHAN && current->kind != TOK_NEWLINE && current->kind != TOK_EOF) {
+        switch (current->kind) {
+            case TOK_COMMENT:
+                CHECK_WRITE(1);
+                out[written++] = ' ';
+            break;
+            default:
+                CHECK_WRITE(current->source.size);
+                strncpy(out + written, handle_to_file(current->source.source_file)->contents + current->source.offset, current->source.size);
+                written += current->source.size;
+            break;
+        }
+
+        next_token(current, tok_state);
+    }
+
+    CHECK_WRITE(1);
+    out[written] = '\0';
+
+    #undef CHECK_WRITE
+
+    if (current->kind == TOK_NEWLINE || current->kind == TOK_NEWLINE) {
+        return false;
+    }
+
+    return true;
+}
+
 static void do_include(preprocessing_state *state) {
     tokenizer_state *tok_state = state->state;
     token *current = state->current;
@@ -175,19 +216,54 @@ static void do_include(preprocessing_state *state) {
             if (new_handle.cache) {
                 free(relative_path);
                 // Preprocess the include in place!
+                // TODO: This is wasteful since we know the file is already in the cache.
+                // Make preprocess point to a preprocess_with_handle which takes handle directly.
                 preprocess(handle_to_file(new_handle)->abs_path, state->tok_vec);
             } else {
-                sc_warning("Could not find file '%s' relative to '%s', searching in include paths instead.", relative_path,
+                sc_warning("Could not locate file '%s' relative to '%s', searching in include paths instead.", relative_path,
                             handle_to_file(tok_state->source_handle)->abs_path);
-                free(relative_path);
 
-                // TODO: call path_table_lookup, refactor out with below.
+                {
+                    char absolute_path[FILENAME_MAX];
+                    if (path_table_lookup(default_paths, relative_path, absolute_path, FILENAME_MAX)) {
+                        // Ok, we found the file in the include path instead.
+                        new_handle = file_cache_load(&file_cache, absolute_path);
+                    } else {
+                        sc_error(false, "File '%s' not located in include paths either.", relative_path);
+                        free(relative_path);
+                        return;
+                    }
+                }
+                assert(new_handle.cache != NULL);
+                preprocess(handle_to_file(new_handle)->abs_path, state->tok_vec);
             }
         } break;
         case TOK_LESSTHAN: {
             // Absolute include.
-            char absolute_path[FILENAME_MAX];
-            // TODO: Combine stuff, call path_table_lookup.
+            // Look up the path in our include path.
+            // If it exists, preprocess it into our token vector.
+            // Otherwise, error out.
+            sc_file_cache_handle new_handle = { NULL, 0 };
+            {
+                char include_path[FILENAME_MAX];
+                if (concatenate_path_tokens(current, tok_state, include_path, FILENAME_MAX)) {
+                    // Ok, we concatenated properly.
+                    char absolute_path[FILENAME_MAX];
+                    if (path_table_lookup(default_paths, include_path, absolute_path, FILENAME_MAX)) {
+                        // We found the file!
+                        new_handle = file_cache_load(&file_cache, absolute_path);
+                    } else {
+                        sc_error(false, "Could not locate file '%s' in include path.", include_path);
+                        return;
+                    }
+                } else {
+                    sc_error(false, "Unexpected termination of include path.");
+                    skip_to(current, tok_state, TOK_NEWLINE);
+                    return;
+                }
+            }
+            assert(new_handle.cache != NULL);
+            preprocess(handle_to_file(new_handle)->abs_path, state->tok_vec);
         } break;
         default:
             // TODO
