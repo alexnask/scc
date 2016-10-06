@@ -738,3 +738,11 @@ void tokenizer_state_init(tokenizer_state *state, sc_file_cache_handle handle) {
     state->current_line = 1;
     state->current_column = 1;
 }
+
+char *token_data(token *tok) {
+    return handle_to_file(tok->source.source_file)->contents + tok->source.offset;
+}
+
+long int token_size(token *tok) {
+    return tok->source.size;
+}

@@ -106,6 +106,9 @@ void tokenizer_state_init(tokenizer_state *state, sc_file_cache_handle handle);
 
 void next_token(token *token, tokenizer_state *state);
 
+char *token_data(token *token);
+long int token_size(token *token);
+
 // Notes:
 // String literals must be escaped, check for "\\\n" and remove it completely and replace triglyphs with their respective symbols.
 

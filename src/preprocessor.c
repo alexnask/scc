@@ -9,9 +9,10 @@ static void skip_to(token *current, tokenizer_state *tok_state, token_kind kind)
 }
 
 static char *zero_term_from_token(token *current) {
-    char *buffer = malloc(current->source.size + 1);
-    strncpy(buffer, handle_to_file(current->source.source_file)->contents + current->source.offset, current->source.size);
-    buffer[current->source.size] = '\0';
+    long int tok_size = token_size(current);
+    char *buffer = malloc(tok_size + 1);
+    strncpy(buffer, token_data(current), tok_size);
+    buffer[tok_size] = '\0';
     return buffer;
 }
 
@@ -25,10 +26,12 @@ static char *unescape(const char *start, long int len) {
 
 static bool tok_str_cmp(token *current, const char *str) {
     size_t len = strlen(str);
-    if (current->source.size != len) return false;
+    if (token_size(current) != len) return false;
+
+    char *tok_data = token_data(current);
 
     for (size_t i = 0; i < len; ++i) {
-        if (handle_to_file(current->source.source_file)->contents[current->source.offset + i] != str[i]) return false;
+        if (tok_data[i] != str[i]) return false;
     }
     return true;
 }
@@ -230,9 +233,9 @@ static bool concatenate_path_tokens(token *current, tokenizer_state *tok_state, 
                 out[written++] = ' ';
             break;
             default:
-                CHECK_WRITE(current->source.size);
-                strncpy(out + written, handle_to_file(current->source.source_file)->contents + current->source.offset, current->source.size);
-                written += current->source.size;
+                CHECK_WRITE(token_size(current));
+                strncpy(out + written, token_data(current), token_size(current));
+                written += token_size(current);
             break;
         }
 

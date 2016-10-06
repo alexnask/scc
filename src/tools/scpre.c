@@ -32,8 +32,7 @@ int main(int argc, char *argv[]) {
 
     for (size_t i = 0; i < translation_unit.size; i++) {
         token *current = &translation_unit.memory[i];
-        char *data = handle_to_file(current->source.source_file)->contents + current->source.offset;
-        fwrite(data, 1, current->source.size, out_file);
+        fwrite(token_data(current), 1, token_size(current), out_file);
     }
 
     fclose(out_file);
