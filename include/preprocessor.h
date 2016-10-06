@@ -2,13 +2,7 @@
 #define PREPROCESSOR_H__
 
 #include <sc_alloc.h>
-#include <tokenizer.h>
-
-typedef struct token_vector {
-    token *memory;
-    size_t size;
-    size_t capacity;
-} token_vector;
+#include <token_vector.h>
 
 typedef struct preprocessing_state {
     token *current;
@@ -22,13 +16,6 @@ typedef struct preprocessing_state {
     int line_diff;
     const char *path_overwrite;
 } preprocessing_state;
-
-bool token_vector_is_empty(token_vector *vector);
-void token_vector_init_empty(token_vector *vector);
-void token_vector_init(token_vector *vector, size_t initial_capacity);
-// Copies the token into the token vector memory.
-void token_vector_push(token_vector *vector, const token *token);
-void token_vector_destroy(token_vector *vector);
 
 void init_preprocessor(sc_path_table *table, sc_allocator *alloc);
 void release_preprocessor();

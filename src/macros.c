@@ -1,4 +1,5 @@
 #include <macros.h>
+#include <string.h>
 
 bool macro_argument_decl_is_empty(macro_argument_decl *decl) {
     return decl->argument_count == 0 && !decl->has_varargs;
