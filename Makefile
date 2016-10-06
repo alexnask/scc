@@ -12,7 +12,7 @@ LTO=
 all: libsc_alloc libsc_io scpre
 
 release: LTO+=-flto
-release: CFLAGS=-std=c11 -O3 -fomit-frame-pointer -m64
+release: CFLAGS=-std=c11 -O3 -fomit-frame-pointer -m64 -DNDEBUG
 release: all
 
 %.o: $(SRCDIR)/%.c

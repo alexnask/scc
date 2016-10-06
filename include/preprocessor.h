@@ -24,5 +24,6 @@ void release_preprocessor();
 void preprocess(const char *file_path, token_vector *tok_vec);
 
 // TODO: Public interface for defines passed through -D
+// TODO: Builtin defines
 
 #endif

@@ -1,11 +1,25 @@
 #include <preprocessor.h>
 #include <string.h>
 
-// TODO: Check for EOL
+typedef struct preprocessing_state {
+    token *current;
+    tokenizer_state *tok_state;
+    token_vector *tok_vec;
+    size_t if_nesting;
+    // When this is set to true, ignore_until_nesting indicates the level of nesting we are skipping up to.
+    bool ignoring;
+    size_t ignore_until_nesting;
+    // Set by #line
+    int line_diff;
+    const char *path_overwrite;
+} preprocessing_state;
+
+static void preprocess_file(sc_file_cache_handle handle, preprocessing_state *state);
+
 static void skip_to(token *current, tokenizer_state *tok_state, token_kind kind) {
     do {
         next_token(current, tok_state);
-    } while(current->kind != kind);
+    } while(current->kind != kind && current->kind != TOK_EOF);
 }
 
 static char *zero_term_from_token(token *current) {
@@ -146,6 +160,7 @@ void define_table_add(define *def) {
 
     if (old_def) {
         // Boom.
+        define_destroy(old_def);
         *old_def = *def;
     } else {
         if (define_table.define_count >= define_table.capacity) {
@@ -166,9 +181,6 @@ void define_table_destroy() {
 
 sc_file_cache file_cache;
 sc_path_table *default_paths;
-
-// pp_token_vector buff1;
-// pp_token_vector buff2;
 
 bool token_vector_is_empty(token_vector *vector) {
     return vector->size == 0;
@@ -208,19 +220,12 @@ void init_preprocessor(sc_path_table *table, sc_allocator *alloc) {
     default_paths = table;
 
     define_table_init();
-
-    // pp_token_vector_init(&buff1);
-    // pp_token_vector_init(&buff2);
-
     sc_enter_stage("preprocessing");
 }
 
 void release_preprocessor() {
     // TODO: The file cache destroy should be in another function (release_files or something like that).
-    // We can destroy those two vectors but we have to keep file memory around since the tokens point into it.
     define_table_destroy();
-    // pp_token_vector_destroy(&buff1);
-    // pp_token_vector_destroy(&buff2);
     file_cache_destroy(&file_cache);
 }
 
@@ -238,18 +243,6 @@ static bool skip_whitespace(token *current, tokenizer_state *state) {
 
     return true;
 }
-
-typedef struct preprocessing_state {
-    token *current;
-    tokenizer_state *tok_state;
-    token_vector *tok_vec;
-    size_t if_nesting;
-    // Set by #line
-    int line_diff;
-    const char *path_overwrite;
-} preprocessing_state;
-
-static void preprocess_file(sc_file_cache_handle handle, preprocessing_state *state);
 
 static bool concatenate_path_tokens(token *current, tokenizer_state *tok_state, char *out, size_t max_out_len) {
     assert(current->kind == TOK_LESSTHAN);
@@ -319,6 +312,7 @@ static void add_define(preprocessing_state *state) {
             if (!macro_argument_decl_is_empty(&entry->args) || !token_vector_is_empty(&entry->replacement_list)) {
                 // Wow...
                 sc_error(false, "Trying to redefine an object or function macro as a simple macro.");
+                free(define_name);
                 return;
             }
         } else {
@@ -326,11 +320,7 @@ static void add_define(preprocessing_state *state) {
             define_init_empty(&new_def, define_name);
             // Add our def!
             define_table_add(&new_def);
-
-            if (entry) {
-                // Destroy old entry.
-                define_destroy(entry);
-            }
+            return;
         }
     } else if (!had_whitespace) {
         // Ok, we need to have an open paren here.
@@ -538,6 +528,43 @@ static void do_include(preprocessing_state *state) {
     }
 }
 
+static void do_ifdef(bool should_be_defined, preprocessing_state *pre_state) {
+    token *current = pre_state->current;
+    tokenizer_state *tok_state = pre_state->tok_state;
+
+    skip_whitespace(current, tok_state);
+    if (current->kind != TOK_KEYWORD && current->kind != TOK_IDENTIFIER) {
+        sc_error(false, "Expected identifier to check in #%s.", should_be_defined ? "ifdef" : "ifndef");
+        skip_to(current, tok_state, TOK_NEWLINE);
+        return;
+    }
+
+    // Ok, we have an identifier, figure it out.
+    char *define_name = zero_term_from_token(current);
+
+    skip_whitespace(current, tok_state);
+    if (current->kind != TOK_NEWLINE) {
+        free(define_name);
+        sc_error(false, "Expected newline after #%s.", should_be_defined ? "ifdef" : "ifndef");
+        skip_to(current, tok_state, TOK_NEWLINE);
+        return;
+    }
+
+    // Look it up.
+    define *entry = define_table_lookup(define_name);
+    free(define_name);
+
+    // First part: whether it exists
+    // Second part: whether we want it to exist to fire the condition.
+    if ((entry && entry->active) != should_be_defined) {
+        // We need to ignore.
+        pre_state->ignoring = true;
+        pre_state->ignore_until_nesting = pre_state->if_nesting;
+    }
+
+    pre_state->if_nesting++;
+}
+
 static void handle_directive(preprocessing_state *pre_state) {
     token *current = pre_state->current;
     tokenizer_state *state = pre_state->tok_state;
@@ -546,7 +573,7 @@ static void handle_directive(preprocessing_state *pre_state) {
     // Let's skip whitespace/comments.
     skip_whitespace(current, state);
     // Let's read our next token and figure out what is going on
-    switch (current->kind) {
+    if (!pre_state->ignoring) switch (current->kind) {
         case TOK_NEWLINE:
             // Ok, just go on...
             return;
@@ -559,11 +586,12 @@ static void handle_directive(preprocessing_state *pre_state) {
                 // Do error
             } else if (tok_str_cmp(current, "ifdef")) {
                 // Do ifdef
-                skip_to(current, state, TOK_NEWLINE);
+                do_ifdef(true, pre_state);
             } else if (tok_str_cmp(current, "ifndef")) {
                 // Do ifndef
-                skip_to(current, state, TOK_NEWLINE);
+                do_ifdef(false, pre_state);
             } else if (tok_str_cmp(current, "if")) {
+                // TODO;
                 // Do if
                 skip_to(current, state, TOK_NEWLINE);
             } else if (tok_str_cmp(current, "pragma")) {
@@ -579,7 +607,18 @@ static void handle_directive(preprocessing_state *pre_state) {
             } else if (tok_str_cmp(current, "elif")) {
                 skip_to(current, state, TOK_NEWLINE);
             } else if (tok_str_cmp(current, "endif")) {
-                skip_to(current, state, TOK_NEWLINE);
+                if (pre_state->if_nesting == 0) {
+                    sc_error(false, "Trying to #endif when nesting level is already zero...");
+                    skip_to(current, state, TOK_NEWLINE);
+                    return;
+                }
+                pre_state->if_nesting--;
+                skip_whitespace(current, state);
+                if (current->kind != TOK_NEWLINE) {
+                    sc_error(false, "Expected newline directly after #endif...");
+                    skip_to(current, state, TOK_NEWLINE);
+                    return;
+                }
             } else {
                 char *temp = zero_term_from_token(current);
                 sc_error(false, "Invalid preprocessor directive '%s'.", temp);
@@ -595,6 +634,34 @@ static void handle_directive(preprocessing_state *pre_state) {
             skip_to(current, state, TOK_NEWLINE);
             return;
         } break;
+    } else if (current->kind == TOK_KEYWORD || current->kind == TOK_IDENTIFIER) {
+        // TODO: Should we still check for invalid directives while in ignoring mode? Check the standard.
+        if (tok_str_cmp(current, "ifdef") || tok_str_cmp(current, "ifndef") || tok_str_cmp(current, "if")) {
+            pre_state->if_nesting += 1;
+        } else if (tok_str_cmp(current, "else")) {
+            if (pre_state->if_nesting == pre_state->ignore_until_nesting + 1) {
+                // Ok, we must stop ignoring again, since we were ignoring until (N - 1) and we found an else at N.
+                pre_state->ignoring = false;
+                return;
+            }
+        } else if (tok_str_cmp(current, "elif")) {
+            if (pre_state->if_nesting == pre_state->ignore_until_nesting + 1) {
+                // TODO;
+                // Figure out whether the elif condition is met and stop ignoring if it is, keep on otherwise. 
+            }
+        } else if (tok_str_cmp(current, "endif")) {
+            pre_state->if_nesting--;
+            if (pre_state->if_nesting == pre_state->ignore_until_nesting) {
+                pre_state->ignoring = false;
+            }
+
+            skip_whitespace(current, state);
+            if (current->kind != TOK_NEWLINE) {
+                sc_error(false, "Expected newline directly after #endif...");
+                skip_to(current, state, TOK_NEWLINE);
+                return;
+            }
+        }
     }
 }
 
@@ -637,7 +704,10 @@ static void do_preprocessing(preprocessing_state *state) {
             case TOK_EOF:
             break;
             default:
-                token_vector_push(state->tok_vec, state->current);
+                // Ignoring will be set by 'handle_directives'.
+                if (!state->ignoring) {
+                    token_vector_push(state->tok_vec, state->current);
+                }
             break;
         }
     } while(state->current->kind != TOK_EOF);
@@ -654,6 +724,8 @@ static void preprocess_file(sc_file_cache_handle handle, preprocessing_state *st
         .tok_state = &tok_state,
         .tok_vec = state->tok_vec,
         .if_nesting = state->if_nesting,
+        .ignoring = state->ignoring,
+        .ignore_until_nesting = state->ignore_until_nesting,
         // Those are re initialized since we are in a new file.
         .line_diff = 0,
         .path_overwrite = NULL
@@ -663,6 +735,8 @@ static void preprocess_file(sc_file_cache_handle handle, preprocessing_state *st
 
     // Ok, we need to pass the current nesting level to our parent.
     state->if_nesting = new_pp_state.if_nesting;
+    state->ignoring = new_pp_state.ignoring;
+    state->ignore_until_nesting = new_pp_state.ignore_until_nesting;
 }
 
 // TODO: Better errors...
@@ -684,9 +758,15 @@ void preprocess(const char *file_path, token_vector *tok_vec) {
         .tok_state = &tok_state,
         .tok_vec = tok_vec,
         .if_nesting = 0,
+        .ignoring = false,
+        .ignore_until_nesting = 0,
         .line_diff = 0,
         .path_overwrite = NULL
     };
 
     do_preprocessing(&pp_state);
+
+    if (pp_state.if_nesting != 0) {
+        sc_error(false, "Missing %d #endifs in translation unit.", pp_state.if_nesting);
+    }
 }

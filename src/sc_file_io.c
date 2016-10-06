@@ -137,7 +137,7 @@ void file_cache_init(sc_file_cache *cache, sc_allocator *alloc) {
     cache->size = 0;
     cache->capacity = FILE_CACHE_BLOCK_SIZE;
 
-    cache->files = malloc(FILE_CACHE_BLOCK_SIZE * sizeof(sc_file *));
+    cache->files = malloc(FILE_CACHE_BLOCK_SIZE * sizeof(sc_file));
 }
 
 sc_file_cache_handle file_cache_load(sc_file_cache *cache, const char *abs_path) {
@@ -153,13 +153,14 @@ sc_file_cache_handle file_cache_load(sc_file_cache *cache, const char *abs_path)
     if (cache->size >= cache->capacity) {
         // Need to reallocate.
         cache->capacity += FILE_CACHE_BLOCK_SIZE;
-        cache->files = realloc(cache->files, cache->capacity * sizeof(sc_file *));
+        cache->files = realloc(cache->files, cache->capacity * sizeof(sc_file));
     }
 
     // We will use our allocator to keep the absolute path.
     size_t path_len = strlen(abs_path);
     char *new_abs_path = sc_alloc(cache->alloc, path_len + 1);
-    strncpy(new_abs_path, abs_path, path_len + 1);
+    strncpy(new_abs_path, abs_path, path_len);
+    new_abs_path[path_len] = '\0';
 
     file_load(&cache->files[cache->size++], new_abs_path, cache->alloc);
     if (!cache->files[cache->size - 1].contents) {
