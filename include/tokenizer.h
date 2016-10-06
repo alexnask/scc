@@ -109,6 +109,12 @@ void next_token(token *token, tokenizer_state *state);
 char *token_data(token *token);
 long int token_size(token *token);
 
+// Convenience functions
+char *zero_term_from_token(token *current);
+void skip_to(token *current, tokenizer_state *tok_state, token_kind kind);
+char *unescape(const char *start, long int len);
+bool tok_str_cmp(token *current, const char *str);
+
 // Notes:
 // String literals must be escaped, check for "\\\n" and remove it completely and replace triglyphs with their respective symbols.
 

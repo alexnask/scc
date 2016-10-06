@@ -41,6 +41,7 @@ static const char *const keywords[] = {
 
 static bool is_keyword(const char *data, long int len) {
     for (size_t i = 0; i < sizeof(keywords) / sizeof(char *); ++i) {
+
         if (len != strlen(keywords[i])) continue;
         if (!strncmp(data, keywords[i], len)) return true;
     }
@@ -744,4 +745,34 @@ char *token_data(token *tok) {
 
 long int token_size(token *tok) {
     return tok->source.size;
+}
+
+char *zero_term_from_token(token *current) {
+    long int tok_size = token_size(current);
+    char *buffer = malloc(tok_size + 1);
+    strncpy(buffer, token_data(current), tok_size);
+    buffer[tok_size] = '\0';
+    return buffer;
+}
+
+void skip_to(token *current, tokenizer_state *tok_state, token_kind kind) {
+    do {
+        next_token(current, tok_state);
+    } while(current->kind != kind && current->kind != TOK_EOF);
+}
+
+char *unescape(const char *start, long int len) {
+    // Do the actual unescaping you lazy sod.
+    char *str = malloc(len + 1);
+    strncpy(str, start, len);
+    str[len] = '\0';
+    return str;
+}
+
+bool tok_str_cmp(token *current, const char *str) {
+    size_t len = strlen(str);
+    if (token_size(current) != len) return false;
+
+    char *tok_data = token_data(current);
+    return !strncmp(tok_data, str, len);
 }
