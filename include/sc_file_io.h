@@ -39,12 +39,12 @@ typedef struct sc_file {
     long int size;
     sc_allocator *alloc;
 
-    const char *abs_path;
+    char *abs_path;
 } sc_file;
 
 // Note that abs_path will be stored in the sc_file.
 // If the file does not exist, returns a zero-filled sc_file. (contents = size = alloc = abs_path = 0)
-void file_load(sc_file *file, const char *abs_path, sc_allocator *alloc);
+void file_load(sc_file *file, char *abs_path, sc_allocator *alloc);
 // This will __NOT__ destroy the abs_path.
 void file_destroy(sc_file *file);
 

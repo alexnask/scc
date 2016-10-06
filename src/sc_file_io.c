@@ -98,7 +98,7 @@ bool path_table_lookup(sc_path_table *table, const char *relative_path, char *ab
     return false;
 }
 
-void file_load(sc_file *file, const char *abs_path, sc_allocator *alloc) {
+void file_load(sc_file *file, char *abs_path, sc_allocator *alloc) {
     FILE *stream =  fopen(abs_path, "r");
 
     if (!stream) {

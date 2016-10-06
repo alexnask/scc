@@ -3,8 +3,6 @@
 
 #include <stdio.h>
 
-// TODO: add output file.
-
 int main(int argc, char *argv[]) {
     // Just assume first argument passed is a file for now.
     if (argc < 3) {

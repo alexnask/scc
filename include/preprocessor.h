@@ -10,6 +10,8 @@ typedef struct token_vector {
     size_t capacity;
 } token_vector;
 
+bool token_vector_is_empty(token_vector *vector);
+void token_vector_init_empty(token_vector *vector);
 void token_vector_init(token_vector *vector, size_t initial_capacity);
 // Copies the token into the token vector memory.
 void token_vector_push(token_vector *vector, const token *token);
@@ -20,5 +22,7 @@ void release_preprocessor();
 
 // This is called recursively.
 void preprocess(const char *file_path, token_vector *tok_vec);
+
+// TODO: Public interface for defines passed through -D
 
 #endif

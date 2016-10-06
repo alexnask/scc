@@ -312,7 +312,7 @@ recognize_token:
     if (is_ident_start(c)) {
         while (is_ident_char(PEEK_CHAR)) { INCR_CHAR; }
         
-        if (is_keyword(data, processed)) {
+        if (is_keyword(data - processed, processed)) {
             END_TOKEN(TOK_KEYWORD);
         } else {
             END_TOKEN(TOK_IDENTIFIER);
