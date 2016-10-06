@@ -114,6 +114,7 @@ char *zero_term_from_token(token *current);
 void skip_to(token *current, tokenizer_state *tok_state, token_kind kind);
 char *unescape(const char *start, long int len);
 bool tok_str_cmp(token *current, const char *str);
+bool skip_whitespace(token *current, tokenizer_state *state);
 
 // Notes:
 // String literals must be escaped, check for "\\\n" and remove it completely and replace triglyphs with their respective symbols.

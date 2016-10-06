@@ -54,21 +54,6 @@ void release_preprocessor() {
     file_cache_destroy(&file_cache);
 }
 
-// Skips whitespace + comments.
-// Returns true if we skipped any whitespace.
-static bool skip_whitespace(token *current, tokenizer_state *state) {
-    next_token(current, state);
-    if (current->kind != TOK_WHITESPACE && current->kind != TOK_COMMENT) {
-        return false;
-    }
-
-    do {
-        next_token(current, state);
-    } while (current->kind == TOK_WHITESPACE || current->kind == TOK_COMMENT);
-
-    return true;
-}
-
 static bool concatenate_path_tokens(token *current, tokenizer_state *tok_state, char *out, size_t max_out_len) {
     assert(current->kind == TOK_LESSTHAN);
 

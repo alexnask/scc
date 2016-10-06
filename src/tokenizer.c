@@ -776,3 +776,18 @@ bool tok_str_cmp(token *current, const char *str) {
     char *tok_data = token_data(current);
     return !strncmp(tok_data, str, len);
 }
+
+// Skips whitespace + comments.
+// Returns true if we skipped any whitespace.
+bool skip_whitespace(token *current, tokenizer_state *state) {
+    next_token(current, state);
+    if (current->kind != TOK_WHITESPACE && current->kind != TOK_COMMENT) {
+        return false;
+    }
+
+    do {
+        next_token(current, state);
+    } while (current->kind == TOK_WHITESPACE || current->kind == TOK_COMMENT);
+
+    return true;
+}
