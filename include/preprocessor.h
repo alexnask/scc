@@ -10,6 +10,19 @@ typedef struct token_vector {
     size_t capacity;
 } token_vector;
 
+typedef struct preprocessing_state {
+    token *current;
+    tokenizer_state *tok_state;
+    token_vector *tok_vec;
+    size_t if_nesting;
+    // When this is set to true, ignore_until_nesting indicates the level of nesting we are skipping up to.
+    bool ignoring;
+    size_t ignore_until_nesting;
+    // Set by #line
+    int line_diff;
+    const char *path_overwrite;
+} preprocessing_state;
+
 bool token_vector_is_empty(token_vector *vector);
 void token_vector_init_empty(token_vector *vector);
 void token_vector_init(token_vector *vector, size_t initial_capacity);
