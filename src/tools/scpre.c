@@ -7,16 +7,15 @@
 
 int main(int argc, char *argv[]) {
     // Just assume first argument passed is a file for now.
-    if (argc < 2) {
-        printf("No file supplied to scpre.\n");
-        printf("Usage: %s <input file>\n", argv[0]);
+    if (argc < 3) {
+        printf("Usage: %s <input file> <output file>\n", argv[0]);
         return 0;
     }
 
-    char *file_path = argv[1];
+    char *in_path = argv[1];
 
     token_vector translation_unit;
-    token_vector_init(&translation_unit);
+    token_vector_init(&translation_unit, 2 * 1024);
 
     sc_path_table default_paths;
     path_table_init(&default_paths);
@@ -24,9 +23,20 @@ int main(int argc, char *argv[]) {
 
     init_preprocessor(&default_paths, mallocator());
 
-    preprocess(file_path, &translation_unit);
+    preprocess(in_path, &translation_unit);
 
     sc_debug("Preprocessor returned translation unit %d tokens long.", translation_unit.size);
+
+    char *out_path = argv[2];
+    FILE *out_file = fopen(out_path, "w");
+
+    for (size_t i = 0; i < translation_unit.size; i++) {
+        token *current = &translation_unit.memory[i];
+        char *data = handle_to_file(current->source.source_file)->contents + current->source.offset;
+        fwrite(data, 1, current->source.size, out_file);
+    }
+
+    fclose(out_file);
 
     sc_enter_stage("cleaning up");
     token_vector_destroy(&translation_unit);
