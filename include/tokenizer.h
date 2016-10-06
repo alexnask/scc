@@ -112,4 +112,6 @@ long int token_size(token *token);
 // Notes:
 // String literals must be escaped, check for "\\\n" and remove it completely and replace triglyphs with their respective symbols.
 
+#else
+#error Included twice.
 #endif

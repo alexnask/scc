@@ -583,7 +583,22 @@ static void handle_directive(preprocessing_state *pre_state) {
             if (tok_str_cmp(current, "include")) {
                 do_include(pre_state);
             } else if (tok_str_cmp(current, "error")) {
-                // Do error
+                // error
+                // TODO: Split this off.
+                skip_whitespace(current, state);
+
+                char error[FILENAME_MAX];
+                size_t written = 0;
+                while (current->kind != TOK_NEWLINE && current->kind != TOK_EOF) {
+                    char *current_str = zero_term_from_token(current);
+                    long int current_size = token_size(current);
+                    strncpy(error + written, current_str, current_size);
+                    free(current_str);
+                    written += current_size;
+                    next_token(current, state);
+                }
+                error[written] = '\0';
+                sc_error(false, "Error: %s", error);
             } else if (tok_str_cmp(current, "ifdef")) {
                 // Do ifdef
                 do_ifdef(true, pre_state);
@@ -603,7 +618,22 @@ static void handle_directive(preprocessing_state *pre_state) {
             } else if (tok_str_cmp(current, "line")) {
                 // Do line
             } else if (tok_str_cmp(current, "else")) {
-                skip_to(current, state, TOK_NEWLINE);
+                if (pre_state->if_nesting == 0) {
+                    sc_error(false, "Dangling else directive (no condition before)...");
+                    skip_to(current, state, TOK_NEWLINE);
+                    return;       
+                }
+
+                // We were not ignoring, so let's do that.
+                pre_state->ignoring = true;
+                pre_state->ignore_until_nesting = pre_state->if_nesting - 1;
+
+                skip_whitespace(current, state);
+                if (current->kind != TOK_NEWLINE) {
+                    sc_error(false, "Newline should follow #else directive...");
+                    skip_to(current, state, TOK_NEWLINE);
+                    return;
+                }
             } else if (tok_str_cmp(current, "elif")) {
                 skip_to(current, state, TOK_NEWLINE);
             } else if (tok_str_cmp(current, "endif")) {

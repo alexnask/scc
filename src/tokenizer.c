@@ -1,7 +1,6 @@
 #include <tokenizer.h>
 #include <ctype.h>
 #include <string.h>
-
 // TODO: Actually replace trigraphs with their respective symbols (textwise), remove comments (turn them into single space), turn tabs into spaces.
 // TODO: Make errors non fatal, return malformed tokens.
 
