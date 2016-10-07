@@ -217,13 +217,91 @@ void add_define(preprocessing_state *state) {
             }
 
             // Read argument list here.
+            bool first = true;
+            while (true) {
+                skip_whitespace(current, tok_state);
+
+                bool comma = false;
+
+                if (current->kind == TOK_COMMA) {
+                    if (first) {
+                        sc_error(false, "Comma as a first token in function macro arguments.");
+                        define_destroy(&new_def);
+                        skip_to(current, tok_state, TOK_NEWLINE);
+                        return;
+                    }
+                    skip_whitespace(current, tok_state);
+                    comma = true;
+                }
+
+                if (!comma && current->kind == TOK_CLOSEPAREN) {
+                    break;
+                } else if (!comma && !first) {
+                    sc_error(false, "Expected comma or closing parenthesis after function macro argument");
+                    define_destroy(&new_def);
+                    skip_to(current, tok_state, TOK_NEWLINE);
+                    return;
+                }
+
+                first = false;
+
+                if (new_def.args.has_varargs) {
+                    sc_error(false, "Trying to add something to function macro arguments after varargs.");
+                    define_destroy(&new_def);
+                    skip_to(current, tok_state, TOK_NEWLINE);
+                    return;
+                }
+
+                switch (current->kind) {
+                    case TOK_KEYWORD: {
+                        char *tok_str = zero_term_from_token(current);
+                        sc_warning("Keyword '%s' in function macro argument list.", tok_str);
+                        macro_argument_decl_add(&new_def.args, tok_str);
+                    } break;
+                    case TOK_IDENTIFIER: {
+                        char *tok_str = zero_term_from_token(current);
+                        macro_argument_decl_add(&new_def.args, tok_str);
+                    } break;
+                    case TOK_DOT: {
+                        int dots = 1;
+                        next_token(current, tok_state);
+                        if (current->kind == TOK_DOT) {
+                            dots++;
+                            next_token(current, tok_state);
+                            if (current->kind == TOK_DOT) {
+                                dots++;
+                            }
+                        }
+
+                        if (dots != 3) {
+                            sc_error(false, "Got '%d' dots in function macro argument list, expected 3 (varargs).", dots);
+                            define_destroy(&new_def);
+                            skip_to(current, tok_state, TOK_NEWLINE);
+                            return;
+                        }
+
+                        new_def.args.has_varargs = true;
+                    } break;
+                    default: {
+                        char *tok_str = zero_term_from_token(current);
+                        sc_error(false, "Unexpected token '%s' in function macro argument list.", tok_str);
+                        free(tok_str);
+                        define_destroy(&new_def);
+                        skip_to(current, tok_state, TOK_NEWLINE);
+                        return;
+                    } break;
+                }
+            }
+            // Check for close paren here, then skip whitespace.
+            assert(current->kind == TOK_CLOSEPAREN);
+            skip_whitespace(current, tok_state);
         }
 
         // Read replacement list here.
         // Check for newline here.
     }
 
-    assert(current->kind == TOK_NEWLINE);
+    //assert(current->kind == TOK_NEWLINE);
 
     // Ok, we built up our macro spec, let's see if we can add it.
     define *existing_entry = define_table_lookup(define_name);
