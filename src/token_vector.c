@@ -27,8 +27,10 @@ void token_vector_push(token_vector *vector, const token *tok) {
 }
 
 void token_vector_destroy(token_vector *vector) {
-    free(vector->memory);
-    vector->memory = NULL;
+    if (vector->memory) {
+        free(vector->memory);
+        vector->memory = NULL;
+    }
     vector->size = 0;
     vector->capacity = 0;
 }

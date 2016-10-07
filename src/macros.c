@@ -31,7 +31,7 @@ void macro_argument_decl_add(macro_argument_decl *decl, char *arg) {
 }
 
 void macro_argument_decl_destroy(macro_argument_decl *decl) {
-    if (decl) {
+    if (decl->arguments) {
         for (size_t i = 0; i < decl->argument_count; i++) {
             free(decl->arguments[i]);
         }
@@ -104,6 +104,84 @@ void define_table_destroy() {
     free(define_table.defines);
 }
 
+static bool accumulate_spaces(token_vector *vec, size_t *space_count, size_t *index) {
+    assert(*index < vec->size);
+
+    token *tok = &vec->memory[*index];
+
+    while (tok->kind == TOK_WHITESPACE || tok->kind == TOK_COMMENT) {
+        if (tok->kind == TOK_WHITESPACE) {
+            *space_count += token_size(tok);
+        } else {
+            assert(tok->kind == TOK_COMMENT);
+            (*space_count)++;
+        }
+
+        (*index)++;
+        tok++;
+        assert(*index < vec->size);
+    }
+
+    return *index != vec->size - 1;
+}
+
+static bool defines_compatible(define *def1, define *def2) {
+    // The rules are as follows:
+    // For argument lists, we need to have the same number of arguments, the same vararg state and the same spelling of arguments.
+    // For replacement lists, we need to have the exact same list (after converting any whitespace character to 1 space and comments to 1 space).
+    bool args_empty = macro_argument_decl_is_empty(&def1->args);
+    if (args_empty != macro_argument_decl_is_empty(&def2->args)) return false;
+
+    bool repl_list_empty = token_vector_is_empty(&def1->replacement_list);
+    if (repl_list_empty != token_vector_is_empty(&def2->replacement_list)) return false;
+
+    if (!args_empty) {
+        // Ok, we have arguments and need to check them.
+        // Check varargs state first.
+        if (def1->args.has_varargs != def2->args.has_varargs) return false;
+
+        // Check argument count next.
+        if (def1->args.argument_count != def2->args.argument_count) return false;
+        // Check argument spelling.
+        for (size_t i = 0; i < def1->args.argument_count; i++) {
+            if (strcmp(def1->args.arguments[i], def2->args.arguments[i])) {
+                return false;
+            }
+        }
+
+        // Ok, arguments check out.
+    }
+
+    if (!repl_list_empty) {
+        // We can't compare the lengths of the vectors since comments are still included here.
+        // Instead, we keep an index into both of the vectors and an accumulated space count.
+        // Whenever we hit a non space token we switch to the second vector and get to that point too and then compare space counts and tokens.
+        size_t space_count1 = 0;
+        size_t space_count2 = 0;
+        size_t idx1 = 0;
+        size_t idx2 = 0;
+
+        while (true) {
+            // Those return false when they've gone through the whole vector, so if we end at different iterations, the replacement lists are not equal.
+            bool succ1 = accumulate_spaces(&def1->replacement_list, &space_count1, &idx1);
+            bool succ2 = accumulate_spaces(&def2->replacement_list, &space_count2, &idx2);
+            if (succ1 != succ2) return false;
+            // If we've ended, the indexes point to the last element of the vector.
+            // This should never be whitespace (should be skipped when making the replacement list).
+            assert(def1->replacement_list.memory[idx1].kind != TOK_WHITESPACE && def1->replacement_list.memory[idx1].kind != TOK_COMMENT);
+            assert(def2->replacement_list.memory[idx2].kind != TOK_WHITESPACE && def2->replacement_list.memory[idx2].kind != TOK_COMMENT);
+
+            // Just check the tokens.
+            if (space_count1 != space_count2) return false;
+            if (!tok_cmp(&def1->replacement_list.memory[idx1], &def2->replacement_list.memory[idx2])) return false;
+        
+            space_count1 = 0;
+            space_count2 = 0;
+        }
+    }
+
+    return true;
+}
 
 // Handle new definitions.
 void add_define(preprocessing_state *state) {
@@ -120,51 +198,43 @@ void add_define(preprocessing_state *state) {
 
     bool had_whitespace = skip_whitespace(current, tok_state);
 
-    // Simple define (no replacement list)
-    // Just #define SMTHING [whitespace]\n
-    if (current->kind == TOK_NEWLINE) {
-        // Ok, we just need to add that simple define.
-        // If it already exists, we need to make sure it was defined with no arguments and replacement list.
-        define *entry = define_table_lookup(define_name);
+    // Tentative new define.
+    define new_def;
+    define_init_empty(&new_def, define_name);
 
-        if (entry && entry->active) {
-            // Already exists, check stuff here.
-            if (!macro_argument_decl_is_empty(&entry->args) || !token_vector_is_empty(&entry->replacement_list)) {
-                // Wow...
-                sc_error(false, "Trying to redefine an object or function macro as a simple macro.");
+    // If we don't have a simple define (#define MACRO_NAME whitespace newline), we need to figure out whether we are an object or function macro.
+    if (current->kind != TOK_NEWLINE) {
+        // If we didn't have whitespace, we should immediately be followed by an open parenthesis.
+        // In that case, we are a function macro.
+        // If we are immediately followed by a non parenthesis non whitespace token, the macro definition is invalid.
+        if (!had_whitespace) {
+            if (current->kind != TOK_OPENPAREN) {
+                sc_error(false, "Need whitespace between object macro definition and replacement list.");
                 free(define_name);
                 return;
             }
-        } else {
-            define new_def;
-            define_init_empty(&new_def, define_name);
-            // Add our def!
-            define_table_add(&new_def);
-            return;
-        }
-    } else if (!had_whitespace) {
-        // Ok, we need to have an open paren here.
-        if (current->kind != TOK_OPENPAREN) {
-            sc_error(false, "Need whitespace between object macro definition and replacement list.");
-            free(define_name);
-            skip_to(current, tok_state, TOK_NEWLINE);
-            return;
+
+            // Read argument list here.
         }
 
-        // Handle function like macro definition here.
-        // We can either directly have a close paren, have '...'
-        // or an argument list with optional ... at the end.
-        skip_whitespace(current, tok_state);
-        if (current->kind != TOK_CLOSEPAREN) {
-            // No closing paren, actually find our identifier (argument) list.
-        }
+        // Read replacement list here.
+        // Check for newline here.
     }
 
-    // read replacement list here
+    assert(current->kind == TOK_NEWLINE);
 
-    // check redefinition.
-
-    // add to define table.
+    // Ok, we built up our macro spec, let's see if we can add it.
+    define *existing_entry = define_table_lookup(define_name);
+    if (!existing_entry || !existing_entry->active) {
+        // Ok, we don't have such an entry, let's just add ours!
+        define_table_add(&new_def);
+    } else {
+        // There is an entry with this name.
+        // We need to see if it is compatible and error out if it is not.
+        if (!defines_compatible(&new_def, existing_entry)) {
+            sc_error(false, "Trying to redefine macro '%s' with incompatible definition.");
+        }
+    }
 }
 
 // Check #defines, call add_define

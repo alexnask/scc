@@ -791,3 +791,12 @@ bool skip_whitespace(token *current, tokenizer_state *state) {
 
     return true;
 }
+
+bool tok_cmp(token *tok1, token *tok2) {
+    // TODO: Pretty sure this is right.
+    // We shouldnt need to compare the token values, right?
+    long int len = token_size(tok1);
+    if (len != token_size(tok2)) return false;
+
+    return !strncmp(token_data(tok1), token_data(tok2), len);
+}
