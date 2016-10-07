@@ -171,8 +171,9 @@ static bool defines_compatible(define *def1, define *def2) {
             assert(def1->replacement_list.memory[idx1].kind != TOK_WHITESPACE && def1->replacement_list.memory[idx1].kind != TOK_COMMENT);
             assert(def2->replacement_list.memory[idx2].kind != TOK_WHITESPACE && def2->replacement_list.memory[idx2].kind != TOK_COMMENT);
 
+            // Check that we have whitespace in both cases.
+            if ((space_count1 != 0) != (space_count2 != 0)) return false;
             // Just check the tokens.
-            if (space_count1 != space_count2) return false;
             if (!tok_cmp(&def1->replacement_list.memory[idx1], &def2->replacement_list.memory[idx2])) return false;
 
             idx1++;
@@ -297,16 +298,7 @@ void add_define(preprocessing_state *state) {
             }
             // Check for close paren here, then skip whitespace.
             assert(current->kind == TOK_CLOSEPAREN);
-            had_whitespace = skip_whitespace(current, tok_state);
-
-            if (!had_whitespace) {
-                if (current->kind != TOK_NEWLINE) {
-                    sc_error(false, "Expected whitespace between function macro argument list and replacement list.");
-                    define_destroy(&new_def);
-                    skip_to(current, tok_state, TOK_NEWLINE);
-                    return;
-                }
-            }
+            skip_whitespace(current, tok_state);
         }
     }
 
@@ -317,6 +309,14 @@ void add_define(preprocessing_state *state) {
             token_vector_push(&new_def.replacement_list, current);
             next_token(current, tok_state);
         } while (current->kind != TOK_NEWLINE && current->kind != TOK_EOF);
+
+        // We need to remove trailing whitespace.
+        // TODO: split this into a token_vector_function?
+        token *list_tok = &new_def.replacement_list.memory[new_def.replacement_list.size-1];
+        while (list_tok->kind == TOK_WHITESPACE || list_tok->kind == TOK_COMMENT) {
+            new_def.replacement_list.size--;
+            list_tok--;
+        }
     }
 
     // Ok, we built up our macro spec, let's see if we can add it.
