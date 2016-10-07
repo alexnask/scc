@@ -294,14 +294,26 @@ void add_define(preprocessing_state *state) {
             }
             // Check for close paren here, then skip whitespace.
             assert(current->kind == TOK_CLOSEPAREN);
-            skip_whitespace(current, tok_state);
-        }
+            had_whitespace = skip_whitespace(current, tok_state);
 
-        // Read replacement list here.
-        // Check for newline here.
+            if (!had_whitespace) {
+                if (current->kind != TOK_NEWLINE) {
+                    sc_error(false, "Expected whitespace between function macro argument list and replacement list.");
+                    define_destroy(&new_def);
+                    skip_to(current, tok_state, TOK_NEWLINE);
+                    return;
+                }
+            }
+        }
     }
 
-    //assert(current->kind == TOK_NEWLINE);
+    if (current->kind != TOK_NEWLINE) {
+        // Read replacement list here.
+        do {
+            token_vector_push(&new_def.replacement_list, current);
+            next_token(current, tok_state);
+        } while (current->kind != TOK_NEWLINE && current->kind != TOK_EOF);
+    }
 
     // Ok, we built up our macro spec, let's see if we can add it.
     define *existing_entry = define_table_lookup(define_name);
