@@ -175,6 +175,9 @@ static bool defines_compatible(define *def1, define *def2) {
             if (space_count1 != space_count2) return false;
             if (!tok_cmp(&def1->replacement_list.memory[idx1], &def2->replacement_list.memory[idx2])) return false;
 
+            idx1++;
+            idx2++;
+
             if (!succ1) break;
 
             space_count1 = 0;
@@ -308,6 +311,7 @@ void add_define(preprocessing_state *state) {
     }
 
     if (current->kind != TOK_NEWLINE) {
+        skip_whitespace(current, tok_state);
         // Read replacement list here.
         do {
             token_vector_push(&new_def.replacement_list, current);
@@ -324,7 +328,8 @@ void add_define(preprocessing_state *state) {
         // There is an entry with this name.
         // We need to see if it is compatible and error out if it is not.
         if (!defines_compatible(&new_def, existing_entry)) {
-            sc_error(false, "Trying to redefine macro '%s' with incompatible definition.");
+            sc_error(false, "Trying to redefine macro '%s' with incompatible definition.", define_name);
+            define_destroy(&new_def);
         }
     }
 }
