@@ -283,6 +283,7 @@ static void handle_directive(preprocessing_state *pre_state) {
                     skip_to(current, state, TOK_NEWLINE);
                     return;
                 }
+
                 pre_state->if_nesting--;
                 skip_whitespace(current, state);
                 if (current->kind != TOK_NEWLINE) {
@@ -308,7 +309,7 @@ static void handle_directive(preprocessing_state *pre_state) {
     } else if (current->kind == TOK_KEYWORD || current->kind == TOK_IDENTIFIER) {
         // TODO: Should we still check for invalid directives while in ignoring mode? Check the standard.
         if (tok_str_cmp(current, "ifdef") || tok_str_cmp(current, "ifndef") || tok_str_cmp(current, "if")) {
-            pre_state->if_nesting += 1;
+            pre_state->if_nesting++;
         } else if (tok_str_cmp(current, "else")) {
             if (pre_state->if_nesting == pre_state->ignore_until_nesting + 1) {
                 // Ok, we must stop ignoring again, since we were ignoring until (N - 1) and we found an else at N.
@@ -403,6 +404,10 @@ static void preprocess_file(sc_file_cache_handle handle, preprocessing_state *st
     };
 
     do_preprocessing(&new_pp_state);
+
+    if (new_pp_state.if_nesting - state->if_nesting > 0) {
+        printf("ERROR IN: %s (%lu)\n", handle_to_file(handle)->abs_path, new_pp_state.if_nesting - state->if_nesting);
+    }
 
     // Ok, we need to pass the current nesting level to our parent.
     state->if_nesting = new_pp_state.if_nesting;

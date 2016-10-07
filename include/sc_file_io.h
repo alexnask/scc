@@ -10,6 +10,7 @@
 
 #ifndef FILE_CACHE_BLOCK_SIZE
     #define FILE_CACHE_BLOCK_SIZE 16
+    //#
 #endif
 
 // Combines an absolute and a relative path

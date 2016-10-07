@@ -195,13 +195,6 @@ void add_define(preprocessing_state *state) {
     token *current = state->current;
 
     char *define_name = zero_term_from_token(current);
-
-    //define *maybe_exists = define_table_lookup(define_name);
-    //bool exists = maybe_exists && maybe_exists->active;
-
-    //macro_argument_decl arg_decl;
-    //macro_argument_decl_init(&arg_decl);
-
     bool had_whitespace = skip_whitespace(current, tok_state);
 
     // Tentative new define.
@@ -303,7 +296,6 @@ void add_define(preprocessing_state *state) {
     }
 
     if (current->kind != TOK_NEWLINE) {
-        skip_whitespace(current, tok_state);
         // Read replacement list here.
         do {
             token_vector_push(&new_def.replacement_list, current);
@@ -318,6 +310,8 @@ void add_define(preprocessing_state *state) {
             list_tok--;
         }
     }
+
+    assert(current->kind == TOK_NEWLINE);
 
     // Ok, we built up our macro spec, let's see if we can add it.
     define *existing_entry = define_table_lookup(define_name);
@@ -354,8 +348,6 @@ void do_define(preprocessing_state *state) {
         }
         case TOK_IDENTIFIER:
             add_define(state);
-            // TEMPORARY
-            return;
         break;
         default:
             sc_error(false, "Expected identifier after #define.");
