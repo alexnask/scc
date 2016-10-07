@@ -405,10 +405,6 @@ static void preprocess_file(sc_file_cache_handle handle, preprocessing_state *st
 
     do_preprocessing(&new_pp_state);
 
-    if (new_pp_state.if_nesting - state->if_nesting > 0) {
-        printf("ERROR IN: %s (%lu)\n", handle_to_file(handle)->abs_path, new_pp_state.if_nesting - state->if_nesting);
-    }
-
     // Ok, we need to pass the current nesting level to our parent.
     state->if_nesting = new_pp_state.if_nesting;
     state->ignoring = new_pp_state.ignoring;
