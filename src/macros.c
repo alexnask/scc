@@ -174,7 +174,9 @@ static bool defines_compatible(define *def1, define *def2) {
             // Just check the tokens.
             if (space_count1 != space_count2) return false;
             if (!tok_cmp(&def1->replacement_list.memory[idx1], &def2->replacement_list.memory[idx2])) return false;
-        
+
+            if (!succ1) break;
+
             space_count1 = 0;
             space_count2 = 0;
         }
