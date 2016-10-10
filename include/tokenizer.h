@@ -29,6 +29,7 @@ typedef enum pp_token_kind {
     PP_TOK_COMMA,
     PP_TOK_QUESTION_MARK,
     PP_TOK_ASSIGN,
+    PP_TOK_PLUS,
     PP_TOK_PLUS_ASSIGN,
     PP_TOK_MINUS,
     PP_TOK_MINUS_ASSIGN,
@@ -68,29 +69,30 @@ typedef enum pp_token_kind {
     PP_TOK_CLOSE_PAREN,
     PP_TOK_SEMICOLON,
     // This isn't specified by the standard but at this point we need it.
-    PP_NEWLINE,
-    PP_OTHER,
+    PP_TOK_NEWLINE,
+    PP_TOK_OTHER,
     // Cannot be read.
-    PP_PLACEMARKER
+    PP_TOK_PLACEMARKER,
+    PP_TOK_EOF
 } pp_token_kind;
 
 typedef struct pp_token {
     pp_token_kind kind;
 
     struct {
-        char * const path;
+        const char *path;
         size_t line;
         size_t column;
     } source;
 
     // Whether there is whitespace after the token.
-    bool whitesapce;
+    bool whitespace;
     string data;
-};
+} pp_token;
 
 typedef struct tokenizer_state {
     // File path
-    char * const path;
+    const char *path;
 
     // Current column and line at the start and end of the current chunk.
     size_t line_start;
@@ -99,7 +101,7 @@ typedef struct tokenizer_state {
     size_t column_end;
 
     // Pointer to our constant file data.
-    char * const data;
+    const char *data;
     // Current index + whole size.
     size_t index;
     size_t data_size;
@@ -109,11 +111,16 @@ typedef struct tokenizer_state {
     // How many bytes out of the current_data have been processed.
     size_t done;
 
-    // Whether we encountered whitespace at the end of the initial processing for current chunk.
-    bool whitespace;
+    // Whether we've reached EOF.
+    // Always return PP_TOK_EOF with uninitialized strings after that
+    bool found_eof;
 } tokenizer_state;
 
 void tokenizer_state_init(tokenizer_state *state, sc_file_cache_handle handle);
 void next_token(pp_token *token, tokenizer_state *state);
+
+// TODO: Token type
+// With these source kinds: file, define
+// Will have a source stack to track origins.
 
 #endif

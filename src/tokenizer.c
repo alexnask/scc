@@ -26,15 +26,14 @@ static void initial_processing(tokenizer_state *state) {
     // This also gives us a nice error recovery strategy for the tokenizer (just leave the rest of the current string and ask for a new one).
     // assert(state->done == string_size(&data->current_data));
 
-    string *current = &data->current_data;
+    string *current = &state->current_data;
     // Reset our string.
     string_resize(current, 0);
     state->done = 0;
-    state->whitespace = false;
     state->line_start = state->line_end;
     state->column_start = state->column_end;
 
-    char * const data = state->data + index;
+    const char *data = state->data + state->index;
 
     #define BOUNDS_CHECK if (state->index == state->data_size - 1)
     #define PEEK_CHAR data[0]
@@ -43,7 +42,7 @@ static void initial_processing(tokenizer_state *state) {
     #define SKIP_CHAR_OR_ADD { state->index++; BOUNDS_CHECK { string_push(current, PEEK_CHAR); return; } data++; state->column_end++; }
     #define ADD_LINE { state->line_end++; state->column_end = 1; }
 
-    // We keep going until we find a newline, eof or whitespace (which we all skip and don't insert into our string).
+    // We keep going until we find a newline or eof.
     while (true) {
         // We found EOF.
         BOUNDS_CHECK {
@@ -113,19 +112,10 @@ static void initial_processing(tokenizer_state *state) {
                         string_append_ptr_size(current, data - 2, 3);
                         data++;
                         state->index++;
-                        state->column++;
+                        state->column_end++;
                     break;
                 }
             }
-        } else if (is_whitespace(PEEK_CHAR)) {
-            SKIP_CHAR;
-            do {
-                BOUNDS_CHECK { break; }
-                if (is_whitespace(PEEK_CHAR)) SKIP_CHAR;
-                else break;
-            } while(true);
-            state->whitespace = true;
-            return;
         } else ADD_CHAR;
     }
 
@@ -137,10 +127,89 @@ static void initial_processing(tokenizer_state *state) {
     #undef BOUNDS_CHECK
 }
 
+static bool skip_singleline(tokenizer_state *state, size_t *processed) {
+    string *current = &state->current_data;
+    const char * data = string_data(current) + state->done;
+    size_t chunk_size = string_size(current);
+
+    while (true) {
+        if (*processed + state->done == chunk_size - 1) {
+            if (data[*processed] != '\n') {
+                (*processed)++;
+                return false;
+            } else {
+                (*processed)++;
+                state->line_start++;
+                state->column_start = 1;
+                return true;
+            }
+        }
+
+        state->column_start++;
+        (*processed)++;
+    }
+}
+
+static bool skip_multiline(tokenizer_state *state, size_t *processed) {
+    string *current = &state->current_data;
+    char * const data = string_data(current) + state->done;
+
+    size_t chunk_size = string_size(current);
+
+    while (true) {
+        if (*processed + state->done == chunk_size - 1) {
+            if (data[*processed] != '\n') {
+                (*processed)++;
+                return false;
+            } else {
+                // Ok.
+                state->line_start++;
+                state->column_start = 1;
+
+                // Get a new chunk.
+                *processed = 0;
+                initial_processing(state);
+                chunk_size = string_size(current);
+                continue;
+            }
+        }
+
+        if (data[*processed] == '*') {
+            // We could be ending the multi line comment!
+            if (*processed < chunk_size - 1 && data[*processed + 1] == '/') {
+                *processed += 2;
+                return true;
+            }
+        }
+
+        if (data[*processed] == '\n') {
+            state->line_start++;
+            state->column_start = 1;
+        } else {
+            state->column_start++;
+        }
+
+        (*processed)++;
+    }
+
+    assert(false);
+    return false;
+}
+
 void next_token(pp_token *token, tokenizer_state *state) {
+    if (state->found_eof) {
+        token->kind = PP_TOK_EOF;
+        return;
+    }
+
     string *current = &state->current_data;
     size_t chunk_size = string_size(current);
 
+    const char *data;
+    size_t processed;
+
+    // TODO: What happens if we pull an exmpty chunk? Should check and repull.
+token_start:
     if (state->done == chunk_size) {
         // Pull some processed data to tokenize.
         // Note that chunks end with whitespace or newlines, so we may need to pull more data in many cases.
@@ -148,33 +217,62 @@ void next_token(pp_token *token, tokenizer_state *state) {
         chunk_size = string_size(current);
     }
 
-    char * const data = string_data(current) + state->done;
-    size_t processed = 0;
+    data = string_data(current) + state->done;
+    processed = 0;
 
-    // TODO: What happens if we pull an exmpty chunk? Should check and repull.
-token_start:
     // Token prologue
+    token->whitespace = false;
     token->source.path = state->path;
     token->source.line = state->line_start;
     token->source.column = state->column_start;
 
     #define PEEK_CHAR data[0]
-    #define ADD_CHAR { data++; processed++; }
-    #define HAS_CHAR (processed - state->done < chunk_size)
+    #define ADD_CHAR { data++; processed++; state->column_start++; }
+    #define HAS_CHAR (processed + state->done < chunk_size)
     #define PULL_CHUNK { initial_processing(state); chunk_size = string_size(current); processed = 0; data = string_data(current); }
 
+    // Check for null terminator.
+    if (PEEK_CHAR == '\0') {
+        // We should be at EOF, check
+        if (state->index != state->data_size) {
+            sc_error(false, "Stray null terminator in input...");
+            state->done++;
+            goto token_start;
+        } else {
+            state->found_eof = true;
+            token->kind = PP_TOK_EOF;
+        }
+    }
     // Let's start with newlines
-    if (PEEK_CHAR == '\r') {
+    else if (PEEK_CHAR == '\r') {
         ADD_CHAR;
         if (!HAS_CHAR || PEEK_CHAR != '\n') {
             sc_error(false, "Expected \\n after \\r...");
-            // Recover error.
-            PULL_CHUNK;
+            state->done += processed;
             goto token_start;
         } else {
             ADD_CHAR;
+            state->line_start++;
+            state->column_start = 1;
             token->kind = PP_TOK_NEWLINE;
         }
+    } else if (PEEK_CHAR == '\n') {
+        // Simple newline!
+        ADD_CHAR;
+        state->line_start++;
+        state->column_start = 1;
+        token->kind = PP_TOK_NEWLINE;
+    } else if (is_whitespace(PEEK_CHAR)) {
+        // Skip whitespace.
+        ADD_CHAR;
+        while (HAS_CHAR && is_whitespace(PEEK_CHAR)) {
+            ADD_CHAR;
+        }
+
+        // Next token please!
+        state->done += processed;
+        processed = 0;
+        goto token_start;
     } else if (is_ident_start(PEEK_CHAR)) {
         // Identifiers
         ADD_CHAR;
@@ -253,6 +351,27 @@ token_start:
         if (HAS_CHAR && PEEK_CHAR == '=') {
             ADD_CHAR;
             token->kind = PP_TOK_DIV_ASSIGN;
+        } else if (HAS_CHAR && PEEK_CHAR == '/') {
+            // Single line comment.
+            ADD_CHAR;
+            if (!skip_singleline(state, &processed)) {
+                token->kind = PP_TOK_EOF;
+                state->found_eof = true;
+            } else {
+                state->done += processed;
+                goto token_start;
+            }
+        } else if (HAS_CHAR && PEEK_CHAR == '*') {
+            // Multi line comment.
+            ADD_CHAR;
+            if (!skip_multiline(state, &processed)) {
+                sc_error(false, "Multi line comment not closed (ends at end of file).");
+                token->kind = PP_TOK_EOF;
+                state->found_eof = true;
+            } else {
+                state->done += processed;
+                goto token_start;
+            }
         } else {
             token->kind = PP_TOK_DIV;
         }
@@ -270,7 +389,7 @@ token_start:
             if (HAS_CHAR && PEEK_CHAR == '#') {
                 ADD_CHAR;
                 token->kind = PP_TOK_DOUBLEHASH;
-            } else if (HAS_CHAR && PEEK_CHAR == '%' && processed - state_done < chunk_size - 1 && data[1] == ':') {
+            } else if (HAS_CHAR && PEEK_CHAR == '%' && processed + state->done < chunk_size - 1 && data[1] == ':') {
                 ADD_CHAR; ADD_CHAR;
                 token->kind = PP_TOK_DOUBLEHASH;
             } else {
@@ -377,49 +496,71 @@ token_start:
     do_number:
         ADD_CHAR;
         token->kind = PP_TOK_NUMBER;
-        // TODO: Do rest here.
-        // Then include headers (separate function called from the preprocessor)
+        
+        // We accept any alphanumerical character, dots, underscores and exponents.
+        while (true) {
+            if (!HAS_CHAR) break;
+            if (!is_ident_char(PEEK_CHAR) && PEEK_CHAR != '.') break;
+            if (PEEK_CHAR == 'e' || PEEK_CHAR == 'E' || PEEK_CHAR == 'p' || PEEK_CHAR == 'P') {
+                ADD_CHAR;
+                // Accept + or -
+                if (HAS_CHAR && (PEEK_CHAR == '+' || PEEK_CHAR == '-')) {
+                    ADD_CHAR;
+                }
+            } else ADD_CHAR;
+        }
+
+        // Then include header (sseparate function called from the preprocessor)
         // Then string literals (keep whitespace, give chunks until we either hit newline or closing quote)
         // Then character literals (same as above)
-        // Then EOF.
         // Then the rest
-        // Then "regular" token type
-        // With token source that can be "file" or "define" (which can point to other sources.)
-        // (Or a source stack for single allocation, less fragmentation, iteration to produce error message)
     }
+
+    // Token epilogue
+    assert(processed != 0);
+    // Copy over the part that concerns the token.
+    substring(&token->data, current, state->done, state->done + processed);
+    state->done += processed;
+    processed = 0;
+
+    // Check if we are followed by whitespace and annotate it.
+    if (HAS_CHAR && is_whitespace(PEEK_CHAR)) {
+        ADD_CHAR;
+        token->whitespace = true;
+    
+        while (HAS_CHAR && is_whitespace(PEEK_CHAR)) {
+            ADD_CHAR;
+        }
+    }
+
+    // Check for comments.
+    if (HAS_CHAR && PEEK_CHAR == '/') {
+        if (processed + state->done < chunk_size - 1 && data[1] == '/') {
+            // Single line comment!
+            ADD_CHAR;
+            ADD_CHAR;
+            if (!skip_singleline(state, &processed)) {
+                state->found_eof = true;
+            }
+            token->whitespace = true;
+        } else if (processed + state->done < chunk_size - 1 && data[1] == '*') {
+            // Multi line comment!
+            ADD_CHAR;
+            ADD_CHAR;
+            if (!skip_multiline(state, &processed)) {
+                state->found_eof = true;
+            }
+            token->whitespace = true;
+        }
+    }
+
+    state->done += processed;
 
     #undef PULL_CHUNK
     #undef HAS_CHAR
     #undef ADD_CHAR
     #undef PEEK_CHAR
-
-    state->done += processed;
-    // Token epilogue
-    assert(processed != 0);
-    if (state->done == chunk_size) token->whitespace = state->whitespace;
-    // Copy over the part that concerns the token.
-    substring(&token->data, current, state->done, state->done + processed);
 }
-
-typedef struct tokenizer_state {
-    // File path
-    char * const path;
-
-    // Current column and line in input.
-    size_t line;
-    size_t column;
-
-    // Pointer to our constant file data.
-    char * const data;
-    // Current index + whole size.
-    size_t index;
-    size_t data_size;
-
-    // Data after initial processing that we are tokenizing.
-    string current_data;
-    // How many bytes out of the current_data have been processed.
-    size_t done;
-} tokenizer_state;
 
 void tokenizer_state_init(tokenizer_state *state, sc_file_cache_handle handle) {
     state->path = handle_to_file(handle)->abs_path;
@@ -430,4 +571,5 @@ void tokenizer_state_init(tokenizer_state *state, sc_file_cache_handle handle) {
     state->data_size = handle_to_file(handle)->size;
     string_init(&state->current_data, 0);
     state->done = 0;
+    state->found_eof = false;
 }
