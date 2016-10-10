@@ -6,7 +6,7 @@
 
 // Newlines != whitespace
 static bool is_whitespace(const char c) {
-    return c == ' ' || c == '\t';
+    return c == ' ' || c == '\t' || c == '\v' || c == '\f';
 }
 
 // TODO: Extend for utf-8?
@@ -19,784 +19,415 @@ static bool is_ident_char(const char c) {
     return is_ident_start(c) || isdigit(c);
 }
 
-static bool is_hexadecimal_digit(const char c) {
-    return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
-}
+// Initial processing
+static void initial_processing(tokenizer_state *state) {
+    // So, we go through our text and process things like trigraphs, backslash + newline etc.
+    // We fill the state's string with the final characters the tokenizer is meant to process.
+    // This also gives us a nice error recovery strategy for the tokenizer (just leave the rest of the current string and ask for a new one).
+    // assert(state->done == string_size(&data->current_data));
 
-static bool is_octal_digit(const char c) {
-    return c >= '0' && c <= '7';
-}
+    string *current = &data->current_data;
+    // Reset our string.
+    string_resize(current, 0);
+    state->done = 0;
+    state->whitespace = false;
+    state->line_start = state->line_end;
+    state->column_start = state->column_end;
 
-static const char *const keywords[] = {
-    "auto"    , "break"     , "case"     , "char"    , "const"    , "continue",
-    "default" , "do"        , "double"   , "else"    , "enum"     , "extern"  ,
-    "float"   , "for"       , "goto"     , "if"      , "inline"   , "int"     , 
-    "register", "restrict"  , "return"   , "short"   , "signed"   , "long"    ,
-    "sizeof"  , "static"    , "struct"   , "switch"  , "typedef"  ,
-    "union"   , "unsigned"  , "void"     , "volatile", "while"    ,
-    "_Alignas", "_Alignof"  , "_Atomic"  , "_Bool"   , "_Complex" ,
-    "_Generic", "_Imaginary", "_Noreturn",
-    "_Thread_local", "_Static_assert",
-};
+    char * const data = state->data + index;
 
-static bool is_keyword(const char *data, long int len) {
-    for (size_t i = 0; i < sizeof(keywords) / sizeof(char *); ++i) {
-
-        if (len != strlen(keywords[i])) continue;
-        if (!strncmp(data, keywords[i], len)) return true;
-    }
-    return false;
-}
-
-// TODO: Lift numeric literals out of the tokenizer into the parser?
-// TODO: Null terminators in numeric literal checks are missing.
-// TODO: We need MUCH better errors.
-void next_token(token *token, tokenizer_state *state) {
-    // Pointer to our current character.
-    const char *data;
-
-    token->source.source_file = state->source_handle;
-
+    #define BOUNDS_CHECK if (state->index == state->data_size - 1)
     #define PEEK_CHAR data[0]
-    // Comma operator fun.
-    #define INCR_CHAR (processed++, state->current_column += 1, c = *(data++))
-    #define END_TOKEN(K) token->kind = K; goto end_token
-    #define INCR_LINE { state->current_line += 1; state->current_column = 1; }
-    #define OR_ASSIGN(K) { if(PEEK_CHAR == '=') { INCR_CHAR; END_TOKEN(K ## ASSIGN); } END_TOKEN(K); }
+    #define ADD_CHAR { string_push(current, PEEK_CHAR); data++; state->index++; state->column_end++; }
+    #define SKIP_CHAR { data++; state->index++; state->column_end++; }
+    #define SKIP_CHAR_OR_ADD { state->index++; BOUNDS_CHECK { string_push(current, PEEK_CHAR); return; } data++; state->column_end++; }
+    #define ADD_LINE { state->line_end++; state->column_end = 1; }
 
-    char c;
-    long int processed = 0;
-
-recognize_token:
-    data = handle_to_file(state->source_handle)->contents + state->current_index;
-    token->source.offset = state->current_index;
-    token->source.line = state->current_line;
-    token->source.column = state->current_column;
-    INCR_CHAR;
-
-    if (c == '/') {
-        // Check for comments:
-        switch (PEEK_CHAR) {
-            case '*':
-                INCR_CHAR;
-                token->kind = TOK_COMMENT;
-
-                while (INCR_CHAR) {
-                    if (c == '*' && PEEK_CHAR == '/') {
-                        INCR_CHAR;
-                        goto end_token;
-                    }
-                }
-                // Hit '\0' before closing comment.
-                sc_error(true, "Hit null terminator before end of multi line comment.");
+    // We keep going until we find a newline, eof or whitespace (which we all skip and don't insert into our string).
+    while (true) {
+        // We found EOF.
+        BOUNDS_CHECK {
             break;
-            case '/':
-                INCR_CHAR;
-                token->kind = TOK_COMMENT;
-
-                while (PEEK_CHAR != '\n' && PEEK_CHAR != '\r' && PEEK_CHAR != '\0') {
-                    INCR_CHAR;
-                }
-
-                if (PEEK_CHAR == '\0') {
-                    sc_error(true, "Hit null terminator before end of single line comment.");
-                }
-
-                goto end_token;
-            break;
-            default:
-                // Just a slash
-                // Check for compound assignment.
-                OR_ASSIGN(TOK_SLASH);
-            break;
-        }
-    }
-
-    // Check for string literal.
-    if (c == '"') {
-        while (INCR_CHAR) {
-            switch (c) {
-                // Check for \" or \\\n
-                case '\\':
-                    if (PEEK_CHAR == '\\') {
-                        INCR_CHAR;
-                    } else if (PEEK_CHAR == '"') {
-                        // Ok!
-                        INCR_CHAR;
-                    } else if (PEEK_CHAR == '\n') {
-                        INCR_CHAR;
-                        INCR_LINE;
-                    } else if (PEEK_CHAR == '\r') {
-                        INCR_CHAR;
-                        if (PEEK_CHAR != '\n') {
-                            sc_error(true, "Stray carriage return without newline.");
-                        }
-                        INCR_CHAR;
-                        INCR_LINE;
-                    }
-                break;
-                case '"':
-                    END_TOKEN(TOK_STRINGLITERAL);
-                break;
-                case '\r':
-                case '\n':
-                    sc_error(true, "Newline in string literal...");
-                break;
-            }
-        }
-
-        assert (c == '\0');
-        sc_error(true, "Hit null terminator before end of string literal.");
-    }
-
-    // Check for character literal.
-    if (c == '\'') {
-        while (INCR_CHAR) {
-            switch (c) {
-                // Check for \' or \\\n
-                case '\\':
-                    if (PEEK_CHAR == '\\') {
-                        INCR_CHAR;
-                    } else if (PEEK_CHAR == '\'') {
-                        // Ok!
-                        INCR_CHAR;
-                    } else if (PEEK_CHAR == '\n') {
-                        INCR_CHAR;
-                        INCR_LINE;
-                    } else if (PEEK_CHAR == '\r') {
-                        INCR_CHAR;
-                        if (PEEK_CHAR != '\n') {
-                            sc_error(true, "Stray carriage return without newline.");
-                        }
-                        INCR_CHAR;
-                        INCR_LINE;
-                    }
-                break;
-                case '\'':
-                    END_TOKEN(TOK_CHARACTERLITERAL);
-                break;
-                case '\r':
-                case '\n':
-                    sc_error(true, "Newline in character literal at line %d, cloumn %d.", state->current_line, state->current_column);
-                break;
-            }
-        }
-
-        assert (c == '\0');
-        sc_error(true, "Hit null terminator before end of character literal.");
-    }
-
-    // Ignore "\\\n".
-    if (c == '\\') {
-        INCR_CHAR;
-
-        // Carriage return perhaps?
-        if (PEEK_CHAR == '\r') {
-            INCR_CHAR;
-            if (PEEK_CHAR != '\n') {
-                sc_error(true, "Found carriage return without newline.");
-            }
         }
 
         if (PEEK_CHAR == '\n') {
-            INCR_CHAR;
-            INCR_LINE;
-            // Change the token start to eliminate that pesky, pesky slash-newline
-            token->source.offset += processed;
-            state->current_index += processed;
-            processed = 0;
-            goto recognize_token;
-        } else {
-            // TODO: I think this is correct.
-            sc_error(true, "Found \\ not followed by newline in middle of input.");
-            return;
-        }
-    }
+            size_t initial_str_size = string_size(current);
+            ADD_CHAR;
+            ADD_LINE;
 
-    // Trigraphs
-    if (c == '?') {
-        if (PEEK_CHAR == '?') {
-            INCR_CHAR;
-
-            switch (INCR_CHAR) {
-                case '=':
-                    // We need to know if we are followed by a regular or a trigraph hash to emit doublehash instead of hash.
-                    if (PEEK_CHAR == '#') {
-                        INCR_CHAR;
-                        END_TOKEN(TOK_DOUBLEHASH);
-                    } else if (PEEK_CHAR == '?' && data[1] == '?' && data[2] == '=') {
-                        // TODO: Bounds check that.
-                        INCR_CHAR;
-                        INCR_CHAR;
-                        INCR_CHAR;
-                        END_TOKEN(TOK_DOUBLEHASH);
-                    }
-
-                    END_TOKEN(TOK_HASH);
-                break;
-                case '(':
-                    END_TOKEN(TOK_OPENSQBRACK);
-                break;
-                case ')':
-                    END_TOKEN(TOK_CLOSESQBRACK);
-                break;
-                case '/':
-                    if (PEEK_CHAR == '\r') {
-                        INCR_CHAR;
-                        if (PEEK_CHAR != '\n') {
-                            sc_error(true, "Found carriage return without newline.");
-                        }
-                    }
-                    if (PEEK_CHAR == '\n') {
-                        INCR_CHAR;
-                        INCR_LINE;
-                        // Change the token start to eliminate that pesky, pesky slash-newline
-                        token->source.offset += processed;
-                        state->current_index += processed;
-                        processed = 0;
-                        goto recognize_token;
-                    } else {
-                        sc_error(true, "Found \\ (originating from ??" "/) not followed by whitespace in middle of input.");
-                    }
-                break;
-                case '\'':
-                    OR_ASSIGN(TOK_BITWISEXOR);
-                break;
-                case '<':
-                    END_TOKEN(TOK_OPENBRACK);
-                break;
-                case '>':
-                    END_TOKEN(TOK_CLOSEBRACK);
-                break;
-                case '!':
-                    // We need to know if we are followed by a regular or a trigraph 'or' to emit logical or instead of bitwise or.
-                    if (PEEK_CHAR == '|') {
-                        INCR_CHAR;
-                        END_TOKEN(TOK_LOGICALOR);
-                    } else if (PEEK_CHAR == '?' && data[1] == '?' && data[2] == '!') {
-                        // TODO: Bounds check that.
-                        INCR_CHAR;
-                        INCR_CHAR;
-                        INCR_CHAR;
-                        END_TOKEN(TOK_LOGICALOR);
-                    }
-
-                    OR_ASSIGN(TOK_BITWISEOR);
-                break;
-                case '-':
-                    END_TOKEN(TOK_BITWISENOT);
-                break;
-                default:
-                    sc_error(true, "Unrecognized trigraph.");
-                break;
+            // Ok, let's find out if we are supposed to bail.
+            // If we have a backslash in our input right before the newline, we have to go on.
+            if (initial_str_size != 0) {
+                // We could have had a backslash right before, check it.
+                if (string_data(current)[initial_str_size - 1] == '\\') continue;
+                else if (initial_str_size > 1 && (string_data(current)[initial_str_size - 1] == '\r') &&
+                         string_data(current)[initial_str_size - 2] == '\\') continue;
+                else break;
             }
-        }
+        } else if (PEEK_CHAR == '?') {
+            SKIP_CHAR_OR_ADD;
 
-        END_TOKEN(TOK_QUESTIONMARK);
-    }
+            if (PEEK_CHAR == '?') {
+                SKIP_CHAR_OR_ADD;
 
-    // Check for newline(s).
-    if (c == '\n' || c == '\r') {
-        if (c == '\n') { INCR_LINE; }
-        while(PEEK_CHAR == '\n' || PEEK_CHAR == '\r') { INCR_CHAR; if (c == '\n') { INCR_LINE; } }
-        END_TOKEN(TOK_NEWLINE);
-    }
-
-    // Check for whitespace.
-    if (is_whitespace(c)) {
-        while (is_whitespace(PEEK_CHAR)) { INCR_CHAR; }
-        END_TOKEN(TOK_WHITESPACE);
-    }
-
-    // Check for keyword or identifier.
-    if (is_ident_start(c)) {
-        while (is_ident_char(PEEK_CHAR)) { INCR_CHAR; }
-        
-        if (is_keyword(data - processed, processed)) {
-            END_TOKEN(TOK_KEYWORD);
-        } else {
-            END_TOKEN(TOK_IDENTIFIER);
-        }
-    }
-
-    // Check for '#'
-    if (c == '#') {
-        if (PEEK_CHAR == '#') {
-            INCR_CHAR;
-            END_TOKEN(TOK_DOUBLEHASH);
-        }
-
-        END_TOKEN(TOK_HASH);
-    }
-
-    if (c == '[') {
-        END_TOKEN(TOK_OPENSQBRACK);
-    }
-
-    if (c == ']') {
-        END_TOKEN(TOK_CLOSESQBRACK);
-    }
-
-    if (c == '^') {
-        END_TOKEN(TOK_BITWISEXOR);
-    }
-
-    if (c == '{') {
-        END_TOKEN(TOK_OPENBRACK);
-    }
-
-    if (c == '}') {
-        END_TOKEN(TOK_CLOSEBRACK);
-    }
-
-    if (c == '|') {
-        if (PEEK_CHAR == '|') {
-            INCR_CHAR;
-            END_TOKEN(TOK_LOGICALOR);
-        }
-
-        OR_ASSIGN(TOK_BITWISEOR);
-    }
-
-    if (c == '&') {
-        if (PEEK_CHAR == '&') {
-            INCR_CHAR;
-            END_TOKEN(TOK_LOGICALAND);
-        }
-
-        OR_ASSIGN(TOK_BITWISEAND);
-    }
-
-    if (c == '~') {
-        END_TOKEN(TOK_BITWISENOT);
-    }
-
-    if (c == '(') {
-        END_TOKEN(TOK_OPENPAREN);
-    }
-
-    if (c == ')') {
-        END_TOKEN(TOK_CLOSEPAREN);
-    }
-
-    if (c == '*') {
-        OR_ASSIGN(TOK_STAR);
-    }
-
-    if (c == '+') {
-        if (PEEK_CHAR == '+') {
-            INCR_CHAR;
-            END_TOKEN(TOK_INCREMENT);
-        }
-
-        OR_ASSIGN(TOK_PLUS);
-    }
-
-    if (c == '-') {
-        if (PEEK_CHAR == '-') {
-            INCR_CHAR;
-            END_TOKEN(TOK_DECREMENT);
-        } else if (PEEK_CHAR == '>') {
-            // -> operator
-            INCR_CHAR;
-            END_TOKEN(TOK_ARROW);
-        }
-
-        OR_ASSIGN(TOK_MINUS);
-    }
-
-    if (c == '%') {
-        OR_ASSIGN(TOK_MODULO);
-    }
-
-    if (c == '<') {
-        if (PEEK_CHAR == '<') {
-            INCR_CHAR;
-            OR_ASSIGN(TOK_LEFTSHIFT);
-        } else if (PEEK_CHAR == '=') {
-            INCR_CHAR;
-            END_TOKEN(TOK_LESSTHANEQ);
-        }
-
-        END_TOKEN(TOK_LESSTHAN);
-    }
-
-    if (c == '>') {
-        if (PEEK_CHAR == '>') {
-            INCR_CHAR;
-            OR_ASSIGN(TOK_RIGHTSHIFT);
-        } else if (PEEK_CHAR == '=') {
-            INCR_CHAR;
-            END_TOKEN(TOK_GREATERTHANEQ);
-        }
-
-        END_TOKEN(TOK_GREATERTHAN);
-    }
-
-    if (c == '!') {
-        if (PEEK_CHAR == '=') {
-            INCR_CHAR;
-            END_TOKEN(TOK_NEQUALS);
-        }
-
-        END_TOKEN(TOK_BANG);
-    }
-
-    if (c == '=') {
-        if (PEEK_CHAR == '=') {
-            INCR_CHAR;
-            END_TOKEN(TOK_EQUALS);
-        }
-
-        END_TOKEN(TOK_ASSIGN);
-    }
-
-    if (c == ':') {
-        END_TOKEN(TOK_COLON);
-    }
-
-    if (c == ';') {
-        END_TOKEN(TOK_SEMICOLON);
-    }
-
-    if (c == ',') {
-        END_TOKEN(TOK_COMMA);
-    }
-
-    // Check for numeric literals
-    // If we start with a dot and then a digit, we are a float literal for sure.
-    if (c == '.' && isdigit(PEEK_CHAR)) {
-        INCR_CHAR;
-        while (isdigit(PEEK_CHAR)) { INCR_CHAR; }
-        token->kind = TOK_DECIMALFLOATLITERAL;
-        goto exponent_optional;
-
-    } else if (c == '.') {
-        // Any other dot instance is the dot operator.
-        END_TOKEN(TOK_DOT);
-    }
-
-    // Some kind of numeric literal.
-    if (isdigit(c)) {
-
-        // single digit into exponent or dot, we are a floating point number.
-        switch (PEEK_CHAR) {
-            case 'e':
-            case 'E':
-                token->kind = TOK_DECIMALFLOATLITERAL;
-                goto exponent_optional;
-            break;
-            case '.':
-                INCR_CHAR;
-                while (isdigit(PEEK_CHAR)) { INCR_CHAR; }
-                token->kind = TOK_DECIMALFLOATLITERAL;
-                goto exponent_optional;
-            break;
-        }
-
-        if (c == '0') {
-            // Could be a single zero, an octal integer literal, a hexadecimal (integer or float) literal or a decimal float literal.
-            // We know that if the next char was e, E or . we wouldn't be here.
-            if (PEEK_CHAR == 'x' || PEEK_CHAR == 'X') {
-                // Hexadecimal literal.
-                INCR_CHAR;
-
-                // If we are followed by a dot, we are a hexadecimal float literal for sure.
-                if (PEEK_CHAR == '.') {
-                    token->kind = TOK_HEXADECIMALFLOATLITERAL;
-                    INCR_CHAR;
-                    if (!is_hexadecimal_digit(PEEK_CHAR)) {
-                        sc_error(true, "Expected hexadecimal digits after 0x. floating point literal.");
-                    }
-                    INCR_CHAR;
-                    while (is_hexadecimal_digit(PEEK_CHAR)) { INCR_CHAR; }
-                    goto binary_exponent;
-                }
-
-                if (!is_hexadecimal_digit(PEEK_CHAR)) {
-                    sc_error(true, "Expected hexadecimal digits after 0x hexadecimal literal notation.");
-                }
-                INCR_CHAR;
-                while (is_hexadecimal_digit(PEEK_CHAR)) { INCR_CHAR; }
-            
-                // Now, we can be a floating point literal if we have a dot or binary exponent notation.
+                // May be a trigraph.
                 switch (PEEK_CHAR) {
-                    case '.':
-                        // Here, the rest of the digits are optional.
-                        INCR_CHAR;
-                        while (is_hexadecimal_digit(PEEK_CHAR)) { INCR_CHAR; }
-                        token->kind = TOK_HEXADECIMALFLOATLITERAL;
-                        goto binary_exponent;
+                    case '(':
+                        SKIP_CHAR;
+                        string_push(current, '[');
                     break;
-                    case 'p':
-                    case 'P':
-                        token->kind = TOK_HEXADECIMALFLOATLITERAL;
-                        goto binary_exponent;
+                    case ')':
+                        SKIP_CHAR;
+                        string_push(current, ']');
+                    break;
+                    case '<':
+                        SKIP_CHAR;
+                        string_push(current, '{');
+                    break;
+                    case '>':
+                        SKIP_CHAR;
+                        string_push(current, '}');
+                    break;
+                    case '=':
+                        SKIP_CHAR;
+                        string_push(current, '#');
+                    break;
+                    case '/':
+                        SKIP_CHAR;
+                        string_push(current, '\\');
+                    break;
+                    case '\'':
+                        SKIP_CHAR;
+                        string_push(current, '^');
+                    break;
+                    case '!':
+                        SKIP_CHAR;
+                        string_push(current, '|');
+                    break;
+                    case '-':
+                        SKIP_CHAR;
+                        string_push(current, '~');
                     break;
                     default:
-                        // Finally, a hexadecimal integer literal
-                        token->kind = TOK_HEXADECIMALINTEGERLITERAL;
-                        goto integer_suffix;
+                        // Not a trigraph after all, write all.
+                        string_append_ptr_size(current, data - 2, 3);
+                        data++;
+                        state->index++;
+                        state->column++;
                     break;
                 }
-            } else if (is_octal_digit(PEEK_CHAR)) {
-                // We have an octal digit next.
-                // Note that this could still be a decimal floating point literal.
-                // Let's skip through as much octal as we can.
-                INCR_CHAR;
-                while (is_octal_digit(PEEK_CHAR)) { INCR_CHAR; }
-                if (isdigit(PEEK_CHAR)) {
-                    // Ok, we have a decimal digit in the sequence.
-                    // This can only mean we are a floating point decimal.
-                    // Let's skip through the decimals.
-                    INCR_CHAR;
-                    while (isdigit(PEEK_CHAR)) { INCR_CHAR; }
-                    // We NEED to have a dot here.
-                    if (PEEK_CHAR != '.') {
-                        sc_error(true, "Expected . while tokenizing a series of decimal numbers starting with zero.");
-                    }
+            }
+        } else if (is_whitespace(PEEK_CHAR)) {
+            SKIP_CHAR;
+            do {
+                BOUNDS_CHECK { break; }
+                if (is_whitespace(PEEK_CHAR)) SKIP_CHAR;
+                else break;
+            } while(true);
+            state->whitespace = true;
+            return;
+        } else ADD_CHAR;
+    }
 
-                    INCR_CHAR;
-                    // We may or may not have decimal digits after the dot.
-                    while (isdigit(PEEK_CHAR)) { INCR_CHAR; }
-                    token->kind = TOK_DECIMALFLOATLITERAL;
-                    goto exponent_optional;
-                } else if (PEEK_CHAR == '.') {
-                    // Ok, our floating point number happened to only have octal digits in it. No big deal.
-                    INCR_CHAR;
-                    while (isdigit(PEEK_CHAR)) { INCR_CHAR; }
-                    token->kind = TOK_DECIMALFLOATLITERAL;
-                    goto exponent_optional;
-                } else {
-                    // Anything else, this is an octal integer point literal.
-                    token->kind = TOK_OCTALINTEGERLITERAL;
-                    goto integer_suffix;
-                }
-            } else if (isdigit(PEEK_CHAR)) {
-                // Non octal decimal digit.
-                // We must be a decimal floating point literal.
-                INCR_CHAR;
-                while (isdigit(PEEK_CHAR)) { INCR_CHAR; }
-                // We NEED a .
-                if (PEEK_CHAR != '.') {
-                    sc_error(true, "Expected . while tokenizing a series of decimal numbers starting with zero.");
-                }
-                INCR_CHAR;
-                while (isdigit(PEEK_CHAR)) { INCR_CHAR; }
-                token->kind = TOK_DECIMALFLOATLITERAL;
-                goto exponent_optional;
-            } else if (PEEK_CHAR == '.') {
-                // 0.(...)
-                INCR_CHAR;
-                token->kind = TOK_DECIMALFLOATLITERAL;
-                while (isdigit(PEEK_CHAR)) { INCR_CHAR; }
-                goto exponent_optional;
+    #undef ADD_LINE
+    #undef SKIP_CHAR_OR_ADD
+    #undef SKIP_CHAR
+    #undef ADD_CHAR
+    #undef PEEK_CHAR
+    #undef BOUNDS_CHECK
+}
+
+void next_token(pp_token *token, tokenizer_state *state) {
+    string *current = &state->current_data;
+    size_t chunk_size = string_size(current);
+
+    if (state->done == chunk_size) {
+        // Pull some processed data to tokenize.
+        // Note that chunks end with whitespace or newlines, so we may need to pull more data in many cases.
+        initial_processing(state);
+        chunk_size = string_size(current);
+    }
+
+    char * const data = string_data(current) + state->done;
+    size_t processed = 0;
+
+    // TODO: What happens if we pull an exmpty chunk? Should check and repull.
+token_start:
+    // Token prologue
+    token->source.path = state->path;
+    token->source.line = state->line_start;
+    token->source.column = state->column_start;
+
+    #define PEEK_CHAR data[0]
+    #define ADD_CHAR { data++; processed++; }
+    #define HAS_CHAR (processed - state->done < chunk_size)
+    #define PULL_CHUNK { initial_processing(state); chunk_size = string_size(current); processed = 0; data = string_data(current); }
+
+    // Let's start with newlines
+    if (PEEK_CHAR == '\r') {
+        ADD_CHAR;
+        if (!HAS_CHAR || PEEK_CHAR != '\n') {
+            sc_error(false, "Expected \\n after \\r...");
+            // Recover error.
+            PULL_CHUNK;
+            goto token_start;
+        } else {
+            ADD_CHAR;
+            token->kind = PP_TOK_NEWLINE;
+        }
+    } else if (is_ident_start(PEEK_CHAR)) {
+        // Identifiers
+        ADD_CHAR;
+
+        while (HAS_CHAR && is_ident_char(PEEK_CHAR)) {
+            ADD_CHAR;
+        }
+
+        token->kind = PP_TOK_IDENTIFIER;
+    }
+    // Punctuators
+    else if (PEEK_CHAR == '#') {
+        ADD_CHAR;
+        if (HAS_CHAR && PEEK_CHAR == '#') {
+            ADD_CHAR;
+            token->kind = PP_TOK_DOUBLEHASH;
+        } else {
+            token->kind = PP_TOK_HASH;
+        }
+    } else if (PEEK_CHAR == '.') {
+        ADD_CHAR;
+        if (HAS_CHAR && isdigit(PEEK_CHAR)) {
+            goto do_number;
+        } else {
+            token->kind = PP_TOK_DOT;
+        }
+    } else if (PEEK_CHAR == '-') {
+        ADD_CHAR;
+        if (HAS_CHAR && PEEK_CHAR == '>') {
+            ADD_CHAR;
+            token->kind = PP_TOK_ARROW;
+        } else if (HAS_CHAR && PEEK_CHAR == '-') {
+            ADD_CHAR;
+            token->kind = PP_TOK_DECREMENT;
+        } else if (HAS_CHAR && PEEK_CHAR == '=') {
+            ADD_CHAR;
+            token->kind = PP_TOK_MINUS_ASSIGN;
+        } else {
+            token->kind = PP_TOK_MINUS;
+        }
+    } else if (PEEK_CHAR == ',') {
+        ADD_CHAR;
+        token->kind = PP_TOK_COMMA;
+    } else if (PEEK_CHAR == '?') {
+        ADD_CHAR;
+        token->kind = PP_TOK_QUESTION_MARK;
+    } else if (PEEK_CHAR == '=') {
+        ADD_CHAR;
+        if (HAS_CHAR && PEEK_CHAR == '=') {
+            ADD_CHAR;
+            token->kind = PP_TOK_EQUALS;
+        } else {
+            token->kind = PP_TOK_ASSIGN;
+        }
+    } else if (PEEK_CHAR == '+') {
+        ADD_CHAR;
+        if (HAS_CHAR && PEEK_CHAR == '+') {
+            ADD_CHAR;
+            token->kind = PP_TOK_INCREMENT;
+        } else if (HAS_CHAR && PEEK_CHAR == '=') {
+            ADD_CHAR;
+            token->kind = PP_TOK_PLUS_ASSIGN;
+        } else {
+            token->kind = PP_TOK_PLUS;
+        }
+    } else if (PEEK_CHAR == '*') {
+        ADD_CHAR;
+        if (HAS_CHAR && PEEK_CHAR == '=') {
+            ADD_CHAR;
+            token->kind = PP_TOK_STAR_ASSIGN;
+        } else {
+            token->kind = PP_TOK_STAR;
+        }
+    } else if (PEEK_CHAR == '/') {
+        ADD_CHAR;
+        if (HAS_CHAR && PEEK_CHAR == '=') {
+            ADD_CHAR;
+            token->kind = PP_TOK_DIV_ASSIGN;
+        } else {
+            token->kind = PP_TOK_DIV;
+        }
+    } else if (PEEK_CHAR == '%') {
+        ADD_CHAR;
+        if (HAS_CHAR && PEEK_CHAR == '=') {
+            ADD_CHAR;
+            token->kind = PP_TOK_MOD_ASSIGN;
+        } else if (HAS_CHAR && PEEK_CHAR == '>') {
+            ADD_CHAR;
+            token->kind = PP_TOK_CLOSE_BRACKET;
+        } else if (HAS_CHAR && PEEK_CHAR == ':') {
+            ADD_CHAR;
+            // Check for double hash here.
+            if (HAS_CHAR && PEEK_CHAR == '#') {
+                ADD_CHAR;
+                token->kind = PP_TOK_DOUBLEHASH;
+            } else if (HAS_CHAR && PEEK_CHAR == '%' && processed - state_done < chunk_size - 1 && data[1] == ':') {
+                ADD_CHAR; ADD_CHAR;
+                token->kind = PP_TOK_DOUBLEHASH;
             } else {
-                // Just a single zero dude, chill out.
-                token->kind = TOK_DECIMALINTEGERLITERAL;
-                goto integer_suffix;
+                token->kind = PP_TOK_HASH;
             }
         } else {
-            // Consume all digits.
-            while (isdigit(PEEK_CHAR)) { INCR_CHAR; }
-            // If we have a . or e or E we are a decimal float literal.
-            // If we don't we are a decimal int literal.
-            switch (PEEK_CHAR) {
-                case '.':
-                    INCR_CHAR;
-                    while (isdigit(PEEK_CHAR)) { INCR_CHAR; }
-                    token->kind = TOK_DECIMALFLOATLITERAL;
-                    goto exponent_optional;
-                break;
-                case 'e':
-                case 'E':
-                    token->kind = TOK_DECIMALFLOATLITERAL;
-                    goto exponent_optional;
-                break;
-                default:
-                    token->kind = TOK_DECIMALINTEGERLITERAL;
-                    goto integer_suffix;
-                break;
-            }
+            token->kind = PP_TOK_MOD;
         }
+    } else if (PEEK_CHAR == '!') {
+        ADD_CHAR;
+        if (HAS_CHAR && PEEK_CHAR == '=') {
+            ADD_CHAR;
+            token->kind = PP_TOK_NOT_EQUALS;
+        } else {
+            token->kind = PP_TOK_LOGICAL_NOT;
+        }
+    } else if (PEEK_CHAR == '>') {
+        ADD_CHAR;
+        if (HAS_CHAR && PEEK_CHAR == '=') {
+            ADD_CHAR;
+            token->kind = PP_TOK_GREATER_EQUALS;
+        } else if (HAS_CHAR && PEEK_CHAR == '>') {
+            ADD_CHAR;
+            if (HAS_CHAR && PEEK_CHAR == '=') {
+                ADD_CHAR;
+                token->kind = PP_TOK_RIGHT_SHIFT_ASSIGN;
+            } else {
+                token->kind = PP_TOK_RIGHT_SHIFT;
+            }
+        } else {
+            token->kind = PP_TOK_GREATER;
+        }
+    } else if (PEEK_CHAR == '<') {
+        ADD_CHAR;
+        if (HAS_CHAR && PEEK_CHAR == '=') {
+            ADD_CHAR;
+            token->kind = PP_TOK_LESS_EQUALS;
+        } else if (HAS_CHAR && PEEK_CHAR == '<') {
+            ADD_CHAR;
+            if (HAS_CHAR && PEEK_CHAR == '=') {
+                ADD_CHAR;
+                token->kind = PP_TOK_LEFT_SHIFT_ASSIGN;
+            } else {
+                token->kind = PP_TOK_LEFT_SHIFT;
+            }
+        } else {
+            token->kind = PP_TOK_LESS;
+        }
+    } else if (PEEK_CHAR == '&') {
+        ADD_CHAR;
+        if (HAS_CHAR && PEEK_CHAR == '=') {
+            ADD_CHAR;
+            token->kind = PP_TOK_BITWISE_AND_ASSIGN;
+        } else if (HAS_CHAR && PEEK_CHAR == '&') {
+            ADD_CHAR;
+            token->kind = PP_TOK_LOGICAL_AND;
+        } else {
+            token->kind = PP_TOK_BITWISE_AND;
+        }
+    } else if (PEEK_CHAR == '|') {
+        ADD_CHAR;
+        if (HAS_CHAR && PEEK_CHAR == '=') {
+            ADD_CHAR;
+            token->kind = PP_TOK_BITWISE_OR_ASSIGN;
+        } else if (HAS_CHAR && PEEK_CHAR == '|') {
+            ADD_CHAR;
+            token->kind = PP_TOK_LOGICAL_OR;
+        } else {
+            token->kind = PP_TOK_BITWISE_OR;
+        }
+    } else if (PEEK_CHAR == '~') {
+        ADD_CHAR;
+        token->kind = PP_TOK_BITWISE_NOT;
+    } else if (PEEK_CHAR == '^') {
+        ADD_CHAR;
+        if (HAS_CHAR && PEEK_CHAR == '=') {
+            ADD_CHAR;
+            token->kind = PP_TOK_BITWISE_XOR_ASSIGN;
+        } else {
+            token->kind = PP_TOK_BITWISE_XOR;
+        }
+    } else if (PEEK_CHAR == '[') {
+        ADD_CHAR;
+        token->kind = PP_TOK_OPEN_SQUARE_BRACKET;
+    } else if (PEEK_CHAR == ']') {
+        ADD_CHAR;
+        token->kind = PP_TOK_CLOSE_SQUARE_BRACKET;
+    } else if (PEEK_CHAR == '{') {
+        ADD_CHAR;
+        token->kind = PP_TOK_OPEN_BRACKET;
+    } else if (PEEK_CHAR == '}') {
+        ADD_CHAR;
+        token->kind = PP_TOK_CLOSE_BRACKET;
+    } else if (PEEK_CHAR == '(') {
+        ADD_CHAR;
+        token->kind = PP_TOK_OPEN_PAREN;
+    } else if (PEEK_CHAR == ')') {
+        ADD_CHAR;
+        token->kind = PP_TOK_CLOSE_PAREN;
+    } else if (PEEK_CHAR == ';') {
+        ADD_CHAR;
+        token->kind = PP_TOK_SEMICOLON;
+    } else if (isdigit(PEEK_CHAR)) {
+    do_number:
+        ADD_CHAR;
+        token->kind = PP_TOK_NUMBER;
+        // TODO: Do rest here.
+        // Then include headers (separate function called from the preprocessor)
+        // Then string literals (keep whitespace, give chunks until we either hit newline or closing quote)
+        // Then character literals (same as above)
+        // Then EOF.
+        // Then the rest
+        // Then "regular" token type
+        // With token source that can be "file" or "define" (which can point to other sources.)
+        // (Or a source stack for single allocation, less fragmentation, iteration to produce error message)
     }
 
-    // Unrecognized character.
-    if (c != '\0') {
-        sc_error(true, "Unrecognized character with character code %d in middle of input.", c);
-    }
-
-    // Found '\0'
-    if (state->current_index + processed != handle_to_file(state->source_handle)->size + 1) {
-        // Todo: add file name + line + column
-        sc_error(true, "Found null terminator in middle of input (%d out of %d processed)", state->current_index + processed
-                                                                                , handle_to_file(state->source_handle)->size + 1);
-    } else {
-        // Ok, we are at end of input.
-        token->kind = TOK_EOF;
-        goto end_token;
-    }
-
-integer_suffix:
-    switch (PEEK_CHAR) {
-        case 'u':
-        case 'U':
-            INCR_CHAR;
-            switch (PEEK_CHAR) {
-                case 'l':
-                    INCR_CHAR;
-                    if (PEEK_CHAR == 'l') INCR_CHAR;
-                break;
-                case 'L':
-                    INCR_CHAR;
-                    if (PEEK_CHAR == 'L') INCR_CHAR;
-                break;
-            }
-        break;
-        case 'l':
-            INCR_CHAR;
-            switch (PEEK_CHAR) {
-                case 'l':
-                    INCR_CHAR;
-                    if (PEEK_CHAR == 'u' || PEEK_CHAR == 'U') INCR_CHAR;
-                break;
-                case 'u':
-                case 'U':
-                    INCR_CHAR;
-                break;
-            }
-        break;
-        case 'L':
-            INCR_CHAR;
-            switch (PEEK_CHAR) {
-                case 'L':
-                    INCR_CHAR;
-                    if (PEEK_CHAR == 'u' || PEEK_CHAR == 'U') INCR_CHAR;
-                break;
-                case 'u':
-                case 'U':
-                    INCR_CHAR;
-                break;
-            }
-        break;
-    }
-    goto end_token;
-
-binary_exponent:
-    switch (PEEK_CHAR) {
-        case 'p':
-        case 'P':
-            INCR_CHAR;
-            if (PEEK_CHAR == '+' || PEEK_CHAR == '-') INCR_CHAR;
-            if (!isdigit(PEEK_CHAR)) {
-                sc_error(true, "Expected digit after binary exponent notation while tokenizing hexadecimal floating point literal.");
-            }
-            INCR_CHAR;
-            while (isdigit(PEEK_CHAR)) { INCR_CHAR; }
-        break;
-        default:
-            sc_error(true, "Expected binary exponent notation wile tokenizing hexadecimal floating point literal.");
-        break;
-    }
-    goto float_suffix;
-exponent_optional:
-    switch (PEEK_CHAR) {
-        case 'e':
-        case 'E':
-            INCR_CHAR;
-            if (PEEK_CHAR == '+' || PEEK_CHAR == '-') INCR_CHAR;
-            if (!isdigit(PEEK_CHAR)) {
-                sc_error(true, "Expected digit after exponent notation while tokenizing decimal floating point literal.");
-            }
-            INCR_CHAR;
-            while (isdigit(PEEK_CHAR)) { INCR_CHAR; }
-        break;
-    }
-float_suffix:
-    switch (PEEK_CHAR) {
-        case 'f':
-        case 'l':
-        case 'F':
-        case 'L':
-            INCR_CHAR;
-        break;
-    }
-
-    #undef OR_ASSIGN
+    #undef PULL_CHUNK
+    #undef HAS_CHAR
+    #undef ADD_CHAR
     #undef PEEK_CHAR
-    #undef INCR_CHAR
-    #undef END_TOKEN
-    #undef INCR_LINE
-end_token:
-    token->source.size = processed;
-    state->current_index += processed;
+
+    state->done += processed;
+    // Token epilogue
+    assert(processed != 0);
+    if (state->done == chunk_size) token->whitespace = state->whitespace;
+    // Copy over the part that concerns the token.
+    substring(&token->data, current, state->done, state->done + processed);
 }
+
+typedef struct tokenizer_state {
+    // File path
+    char * const path;
+
+    // Current column and line in input.
+    size_t line;
+    size_t column;
+
+    // Pointer to our constant file data.
+    char * const data;
+    // Current index + whole size.
+    size_t index;
+    size_t data_size;
+
+    // Data after initial processing that we are tokenizing.
+    string current_data;
+    // How many bytes out of the current_data have been processed.
+    size_t done;
+} tokenizer_state;
 
 void tokenizer_state_init(tokenizer_state *state, sc_file_cache_handle handle) {
-    state->source_handle = handle;
-    state->current_index = 0;
-    state->current_line = 1;
-    state->current_column = 1;
-}
-
-char *token_data(token *tok) {
-    return handle_to_file(tok->source.source_file)->contents + tok->source.offset;
-}
-
-long int token_size(token *tok) {
-    return tok->source.size;
-}
-
-char *zero_term_from_token(token *current) {
-    long int tok_size = token_size(current);
-    char *buffer = malloc(tok_size + 1);
-    strncpy(buffer, token_data(current), tok_size);
-    buffer[tok_size] = '\0';
-    return buffer;
-}
-
-void skip_to(token *current, tokenizer_state *tok_state, token_kind kind) {
-    do {
-        next_token(current, tok_state);
-    } while(current->kind != kind && current->kind != TOK_EOF);
-}
-
-char *unescape(const char *start, long int len) {
-    // Do the actual unescaping you lazy sod.
-    char *str = malloc(len + 1);
-    strncpy(str, start, len);
-    str[len] = '\0';
-    return str;
-}
-
-bool tok_str_cmp(token *current, const char *str) {
-    size_t len = strlen(str);
-    if (token_size(current) != len) return false;
-
-    char *tok_data = token_data(current);
-    return !strncmp(tok_data, str, len);
-}
-
-// Skips whitespace + comments.
-// Returns true if we skipped any whitespace.
-bool skip_whitespace(token *current, tokenizer_state *state) {
-    next_token(current, state);
-    if (current->kind != TOK_WHITESPACE && current->kind != TOK_COMMENT) {
-        return false;
-    }
-
-    do {
-        next_token(current, state);
-    } while (current->kind == TOK_WHITESPACE || current->kind == TOK_COMMENT);
-
-    return true;
-}
-
-bool tok_cmp(token *tok1, token *tok2) {
-    // TODO: Pretty sure this is right.
-    // We shouldnt need to compare the token values, right?
-    long int len = token_size(tok1);
-    if (len != token_size(tok2)) return false;
-
-    return !strncmp(token_data(tok1), token_data(tok2), len);
+    state->path = handle_to_file(handle)->abs_path;
+    state->line_start = state->line_end = 1;
+    state->column_start = state->column_end = 1;
+    state->data = handle_to_file(handle)->contents;
+    state->index = 0;
+    state->data_size = handle_to_file(handle)->size;
+    string_init(&state->current_data, 0);
+    state->done = 0;
 }

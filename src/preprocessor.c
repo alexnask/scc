@@ -191,18 +191,15 @@ static void do_ifdef(bool should_be_defined, preprocessing_state *pre_state) {
         return;
     }
 
-    // Look it up.
-    define *entry = define_table_lookup(define_name);
-    free(define_name);
-
     // First part: whether it exists
     // Second part: whether we want it to exist to fire the condition.
-    if ((entry && entry->active) != should_be_defined) {
+    if (define_exists(define_name) != should_be_defined) {
         // We need to ignore.
         pre_state->ignoring = true;
         pre_state->ignore_until_nesting = pre_state->if_nesting;
     }
 
+    free(define_name);
     pre_state->if_nesting++;
 }
 
@@ -262,7 +259,7 @@ static void handle_directive(preprocessing_state *pre_state) {
                 if (pre_state->if_nesting == 0) {
                     sc_error(false, "Dangling else directive (no condition before)...");
                     skip_to(current, state, TOK_NEWLINE);
-                    return;       
+                    return;
                 }
 
                 // We were not ignoring, so let's do that.

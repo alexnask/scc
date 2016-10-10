@@ -16,4 +16,6 @@ void token_vector_init(token_vector *vector, size_t initial_capacity);
 void token_vector_push(token_vector *vector, const token *token);
 void token_vector_destroy(token_vector *vector);
 
+void token_vector_push_all(token_vector *dest, const token_vector * const src);
+
 #endif

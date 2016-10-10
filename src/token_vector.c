@@ -34,3 +34,10 @@ void token_vector_destroy(token_vector *vector) {
     vector->size = 0;
     vector->capacity = 0;
 }
+
+void token_vector_push_all(token_vector *dest, const token_vector * const src) {
+    // TODO: Do a memcpy instead (realloc dest if necessary)
+    for (size_t i = 0; i < src->size; i++) {
+        token_vector_push(dest, &src->memory[i]);
+    }
+}

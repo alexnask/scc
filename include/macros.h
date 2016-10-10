@@ -19,6 +19,7 @@ typedef struct macro_argument_decl {
 bool macro_argument_decl_is_empty(macro_argument_decl *decl);
 void macro_argument_decl_init_empty(macro_argument_decl *decl);
 void macro_argument_decl_init(macro_argument_decl *decl);
+bool macro_argument_decl_has(macro_argument_decl *decl, char *arg);
 void macro_argument_decl_add(macro_argument_decl *decl, char *arg);
 void macro_argument_decl_destroy(macro_argument_decl *decl);
 
@@ -43,6 +44,7 @@ define *define_table_lookup(char *def_name);
 void define_table_add(define *def);
 void define_table_destroy();
 
+bool define_exists(char *def_name);
 
 void add_define(preprocessing_state *state);
 void do_define(preprocessing_state *state);

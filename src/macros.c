@@ -21,6 +21,14 @@ void macro_argument_decl_init(macro_argument_decl *decl) {
     decl->has_varargs = false;
 }
 
+bool macro_argument_decl_has(macro_argument_decl *decl, char *arg) {
+    for (size_t i = 0; i < decl->argument_count; i++) {
+        if (!strcmp(decl->arguments[i], arg)) return true;
+    }
+
+    return false;
+}
+
 void macro_argument_decl_add(macro_argument_decl *decl, char *arg) {
     if (decl->argument_count >= decl->capacity) {
         decl->capacity += MACRO_ARGUMENT_DECL_BLOCK_SIZE;
@@ -79,7 +87,7 @@ void define_table_add(define *def) {
     define *old_def = define_table_lookup(def->define_name);
 
     if (old_def && old_def->active) {
-        // Nuh-huh
+        assert(false);
         return;
     }
 
@@ -102,6 +110,12 @@ void define_table_destroy() {
         define_destroy(&define_table.defines[i]);
     }
     free(define_table.defines);
+}
+
+bool define_exists(char *def_name) {
+    define *entry = define_table_lookup(def_name);
+
+    return entry && entry->active;
 }
 
 static bool accumulate_spaces(token_vector *vec, size_t *space_count, size_t *index) {
@@ -253,10 +267,24 @@ void add_define(preprocessing_state *state) {
                     case TOK_KEYWORD: {
                         char *tok_str = zero_term_from_token(current);
                         sc_warning("Keyword '%s' in function macro argument list.", tok_str);
+                        if (macro_argument_decl_has(&new_def.args, tok_str)) {
+                            sc_error(false, "Defining argument '%s' of function macro '%s' twice.", tok_str);
+                            free(tok_str);
+                            define_destroy(&new_def);
+                            skip_to(current, tok_state, TOK_NEWLINE);
+                            return;
+                        }
                         macro_argument_decl_add(&new_def.args, tok_str);
                     } break;
                     case TOK_IDENTIFIER: {
                         char *tok_str = zero_term_from_token(current);
+                        if (macro_argument_decl_has(&new_def.args, tok_str)) {
+                            sc_error(false, "Defining argument '%s' of function macro '%s' twice.", tok_str);
+                            free(tok_str);
+                            define_destroy(&new_def);
+                            skip_to(current, tok_state, TOK_NEWLINE);
+                            return;
+                        }
                         macro_argument_decl_add(&new_def.args, tok_str);
                     } break;
                     case TOK_DOT: {
@@ -298,6 +326,13 @@ void add_define(preprocessing_state *state) {
     if (current->kind != TOK_NEWLINE) {
         // Read replacement list here.
         do {
+            if (tok_str_cmp(current, "__VA_ARGS__") && !new_def.args.has_varargs) {
+                sc_error(false, "Identifier __VA_ARGS__ can only appear in vararg macros.");
+                define_destroy(&new_def);
+                skip_to(current, tok_state, TOK_NEWLINE);
+                return;
+            }
+
             token_vector_push(&new_def.replacement_list, current);
             next_token(current, tok_state);
         } while (current->kind != TOK_NEWLINE && current->kind != TOK_EOF);
@@ -313,8 +348,9 @@ void add_define(preprocessing_state *state) {
 
     assert(current->kind == TOK_NEWLINE);
 
-    // Ok, we built up our macro spec, let's see if we can add it.
     define *existing_entry = define_table_lookup(define_name);
+
+    // Ok, we built up our macro spec, let's see if we can add it.
     if (!existing_entry || !existing_entry->active) {
         // Ok, we don't have such an entry, let's just add ours!
         define_table_add(&new_def);
@@ -400,3 +436,167 @@ void do_undef(preprocessing_state *state) {
     }
 }
 
+// Furthermore, if any nested replacements encounter the name of the macro being replaced, it is not replaced.
+typedef struct replacement_context {
+    // The original replacement list.
+    // Will not be modified.
+    const token_vector * const repl_list;
+    // Output.
+    token_vector *out;
+    // Current macro we are replacing
+    // This could be NULL if we are in a global context (i.e. replacing the arguments before replacing a macro function).
+    const define * const macro;
+    // Argument instances (a single varargs instance is provided, if necessary).
+    // Could be null if we need no arguments.
+    const token_vector * const args;
+} replacement_context;
+
+void do_replacement(replacement_context *ctx) {
+    // Ok, let's start.
+    token_vector temp_vec;
+    token_vector_init(&temp_vec, 32);
+
+    token_vector temp_vec_2;
+    if (ctx->args != NULL) token_vector_init(&temp_vec_2, 32);
+    else token_vector_init_empty(&temp_vec_2);
+
+    // Stage 1: argument instance replacement.
+    if (ctx->args != NULL) {
+        size_t arg_count = ctx->macro->args.argument_count;
+        bool has_varargs = ctx->macro->args.has_varargs;
+        size_t true_count = has_varargs ? arg_count + 1 : arg_count;
+
+        token_vector args_out[true_count];
+        // Initialize our output vectors.
+        for (size_t i = 0; i < true_count; ++i) {
+            token_vector_init(&args_out[i], 16);
+        }
+
+        for (size_t i = 0; i < true_count; ++i) {
+            replacement_context arg_ctx = {
+                .repl_list = &ctx->args[i],
+                .out = &args_out[i],
+                .macro = NULL, // global context
+                .args = NULL
+            };
+
+            do_replacement(&arg_ctx);
+        }
+
+        // Stage 2: argument substitution.
+        for (size_t i = 0; i < ctx->repl_list->size; ++i) {
+            token *current = &ctx->repl_list->memory[i];
+
+            // TODO: These should skip whitespace
+            #define PREVIOUS_IS(K) (i > 0 ? ctx->repl_list->memory[i - 1].kind == K : false)
+            #define NEXT_IS(K) (i < ctx->repl_list->size - 1 ? ctx->repl_list->memory[i + 1].kind == K : false)
+            #define CURR_IS(K) (ctx->repl_list->memory[i].kind == K)
+
+            /*  A parameter in the replacement list, unless preceded by a # or ## preprocessing token or
+                followed by a ## preprocessing token (see below), is replaced by the corresponding argument [...]
+            */
+
+            if ((CURR_IS(TOK_IDENTIFIER) || CURR_IS(TOK_KEYWORD)) && !PREVIOUS_IS(TOK_HASH) && !PREVIOUS_IS(TOK_DOUBLEHASH)
+                 && !NEXT_IS(TOK_DOUBLEHASH)) {
+                // Check if we need to replace with an argument.
+                if (tok_str_cmp(current, "__VA_ARGS__")) {
+                    // We know we have varargs, this cannot appear elsewhere.
+                    assert(has_varargs);
+                    // Dest, source
+                    token_vector_push_all(&temp_vec, &args_out[arg_count]);
+                } else {
+                    bool found = false;
+                    for (size_t i = 0; i < arg_count; i++) {
+                        // Matched argument name, let's roll!
+                        if (tok_str_cmp(current, ctx->macro->args.arguments[i])) {
+                            found = true;
+                            token_vector_push_all(&temp_vec, &args_out[i]);
+                            break;
+                        }
+                    }
+
+                    // If we didn't find an argument or varargs to substitute, just push the original token.
+                    if (!found) token_vector_push(&temp_vec, current);
+                }
+
+                /*  If, in the replacement list of a function-like macro, a parameter is immediately preceded
+                    or followed by a ## preprocessing token, the parameter is replaced by the corresponding
+                    argument’s preprocessing token sequence; however, if an argument consists of no
+                    preprocessing tokens, the parameter is replaced by a placemarker preprocessing token
+                    instead.
+                */
+                // TODO: Figure out concatenation, should able to 1-pass #, ## (arg + non-arg)
+                // # -> original token sequence in string
+                // arg ## || ## arg -> placemarker if arg=[] else [expand arg] ## ...
+                // ## expanded from args not executed
+                // non-arg ## non-arg -> try to concatenate if it makes sense. (valid preprocessing token can be formed)
+            } else {
+                // Go ahead!
+                token_vector_push(&temp_vec, current);
+            }
+
+            #undef CURR_IS
+            #undef NEXT_IS
+            #undef PREVIOUS_IS
+        }
+
+        for (size_t i = 0; i < arg_count; ++i) {
+            token_vector_destroy(&args_out[i]);
+        }
+    } else {
+        // We have no arguments, just push the replacement list into our temporary vector.
+        token_vector_push_all(&temp_vec, ctx->repl_list);
+    }
+
+    /*  Each # preprocessing token in the replacement list for a function-like macro shall be
+        followed by a parameter as the next preprocessing token in the replacement list.
+    */
+
+    // Stage 3: ## (for arguments)
+    // Stage 4: # (for arguments)
+    // Stage 5: ## (object + function macros) _NOT FROM ARGUMENT_
+    // Stage 6: Remove placemarker tokens.
+    // Stage 7: Rescan, excluding replacement of current macro_name (this applies even if we need to re-replace later).
+    // Stage 8: _Pragma
+    // Stage 9: Push to out.
+    token_vector_destroy(&temp_vec_2);
+    token_vector_destroy(&temp_vec);
+}
+
+// Called when our current token is an identifier or keyword.
+// Returns whether we replaced the identifier.
+bool macro_replace(preprocessing_state *state) {
+    token *current = state->current;
+    tokenizer_state *tok_state = state->tok_state;
+
+    assert(current->kind == TOK_IDENTIFIER || current->kind == TOK_KEYWORD);
+
+    // TODO: _Pragma
+
+    char *macro_name = zero_term_from_token(current);
+    define *entry = define_table_lookup(macro_name);
+    if (!entry || !entry->active) {
+        free(macro_name);
+        return false;
+    }
+    free(macro_name);
+
+    if (macro_argument_decl_is_empty(&entry->args)) {
+        // Ok, object or simple macro.
+        if (token_vector_is_empty(&entry->replacement_list)) {
+            // Simple macro, nothing to replace.
+            return true;
+        }
+
+        replacement_context ctx = {
+            .repl_list = &entry->replacement_list,
+            .out = state->tok_vec,
+            .macro = entry,
+            .args = NULL,
+        };
+
+        do_replacement(&ctx);
+    }
+
+    return true;
+}
