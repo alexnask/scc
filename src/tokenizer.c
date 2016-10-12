@@ -1,565 +1,506 @@
 #include <tokenizer.h>
+#include <token_vector.h>
 #include <ctype.h>
 #include <string.h>
-// TODO: Actually replace trigraphs with their respective symbols (textwise), remove comments (turn them into single space), turn tabs into spaces.
-// TODO: Make errors non fatal, return malformed tokens.
 
 // Newlines != whitespace
 static bool is_whitespace(const char c) {
     return c == ' ' || c == '\t' || c == '\v' || c == '\f';
 }
 
-// TODO: Extend for utf-8?
 static bool is_ident_start(const char c) {
     return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_';
 }
 
-// TODO: Extend for utf-8?
 static bool is_ident_char(const char c) {
     return is_ident_start(c) || isdigit(c);
 }
 
-// Initial processing
-static void initial_processing(tokenizer_state *state) {
-    // So, we go through our text and process things like trigraphs, backslash + newline etc.
-    // We fill the state's string with the final characters the tokenizer is meant to process.
-    // This also gives us a nice error recovery strategy for the tokenizer (just leave the rest of the current string and ask for a new one).
-    // assert(state->done == string_size(&data->current_data));
-
+// Returns false when we hit EOF.
+static bool get_processed_line(tokenizer_state *state) {
     string *current = &state->current_data;
-    // Reset our string.
     string_resize(current, 0);
+
     state->done = 0;
+
     state->line_start = state->line_end;
     state->column_start = state->column_end;
 
     const char *data = state->data + state->index;
 
-    #define BOUNDS_CHECK if (state->index == state->data_size - 1)
-    #define PEEK_CHAR data[0]
-    #define ADD_CHAR { string_push(current, PEEK_CHAR); data++; state->index++; state->column_end++; }
-    #define SKIP_CHAR { data++; state->index++; state->column_end++; }
-    #define SKIP_CHAR_OR_ADD { state->index++; BOUNDS_CHECK { string_push(current, PEEK_CHAR); return; } data++; state->column_end++; }
-    #define ADD_LINE { state->line_end++; state->column_end = 1; }
+    #define HAS_CHARS(N) (state->index + N < state->data_size)
 
-    // We keep going until we find a newline or eof.
-    while (true) {
-        // We found EOF.
-        BOUNDS_CHECK {
-            break;
+    while (*data != '\n') {
+        // Find backslash newline
+        if (HAS_CHARS(1) && *data == '\\' && data[1] == '\n') {
+            // Skip over.
+            data += 2;
+            state->index += 2;
+            state->line_end++;
+            state->column_end = 1;
         }
-
-        if (PEEK_CHAR == '\n') {
-            size_t initial_str_size = string_size(current);
-            ADD_CHAR;
-            ADD_LINE;
-
-            // Ok, let's find out if we are supposed to bail.
-            // If we have a backslash in our input right before the newline, we have to go on.
-            if (initial_str_size != 0) {
-                // We could have had a backslash right before, check it.
-                if (string_data(current)[initial_str_size - 1] == '\\') continue;
-                else if (initial_str_size > 1 && (string_data(current)[initial_str_size - 1] == '\r') &&
-                         string_data(current)[initial_str_size - 2] == '\\') continue;
-                else break;
+        // Trigraphs
+        else if (HAS_CHARS(3) && *data == '?' && data[1] == '?') {
+            bool trigraph = true;
+            switch (data[2]) {
+                case '(':
+                    string_push(current, '[');
+                break;
+                case ')':
+                    string_push(current, ']');
+                break;
+                case '<':
+                    string_push(current, '{');
+                break;
+                case '>':
+                    string_push(current, '}');
+                break;
+                case '=':
+                    string_push(current, '#');
+                break;
+                case '/':
+                    string_push(current, '\\');
+                break;
+                case '\'':
+                    string_push(current, '^');
+                break;
+                case '!':
+                    string_push(current, '|');
+                break;
+                case '-':
+                    string_push(current, '~');
+                break;
+                default:
+                    trigraph = false;
+                break;
             }
-        } else if (PEEK_CHAR == '?') {
-            SKIP_CHAR_OR_ADD;
 
-            if (PEEK_CHAR == '?') {
-                SKIP_CHAR_OR_ADD;
-
-                // May be a trigraph.
-                switch (PEEK_CHAR) {
-                    case '(':
-                        SKIP_CHAR;
-                        string_push(current, '[');
-                    break;
-                    case ')':
-                        SKIP_CHAR;
-                        string_push(current, ']');
-                    break;
-                    case '<':
-                        SKIP_CHAR;
-                        string_push(current, '{');
-                    break;
-                    case '>':
-                        SKIP_CHAR;
-                        string_push(current, '}');
-                    break;
-                    case '=':
-                        SKIP_CHAR;
-                        string_push(current, '#');
-                    break;
-                    case '/':
-                        SKIP_CHAR;
-                        string_push(current, '\\');
-                    break;
-                    case '\'':
-                        SKIP_CHAR;
-                        string_push(current, '^');
-                    break;
-                    case '!':
-                        SKIP_CHAR;
-                        string_push(current, '|');
-                    break;
-                    case '-':
-                        SKIP_CHAR;
-                        string_push(current, '~');
-                    break;
-                    default:
-                        // Not a trigraph after all, write all.
-                        string_append_ptr_size(current, data - 2, 3);
-                        data++;
-                        state->index++;
-                        state->column_end++;
-                    break;
-                }
-            }
-        } else ADD_CHAR;
-    }
-
-    #undef ADD_LINE
-    #undef SKIP_CHAR_OR_ADD
-    #undef SKIP_CHAR
-    #undef ADD_CHAR
-    #undef PEEK_CHAR
-    #undef BOUNDS_CHECK
-}
-
-static bool skip_singleline(tokenizer_state *state, size_t *processed) {
-    string *current = &state->current_data;
-    const char * data = string_data(current) + state->done;
-    size_t chunk_size = string_size(current);
-
-    while (true) {
-        if (*processed + state->done == chunk_size - 1) {
-            if (data[*processed] != '\n') {
-                (*processed)++;
-                return false;
+            if (!trigraph) {
+                string_append_ptr_size(current, data, 3);
+                state->column_end += 3;
             } else {
-                (*processed)++;
-                state->line_start++;
-                state->column_start = 1;
-                return true;
+                state->column_end++;
             }
-        }
-
-        state->column_start++;
-        (*processed)++;
-    }
-}
-
-static bool skip_multiline(tokenizer_state *state, size_t *processed) {
-    string *current = &state->current_data;
-    char * const data = string_data(current) + state->done;
-
-    size_t chunk_size = string_size(current);
-
-    while (true) {
-        if (*processed + state->done == chunk_size - 1) {
-            if (data[*processed] != '\n') {
-                (*processed)++;
-                return false;
-            } else {
-                // Ok.
-                state->line_start++;
-                state->column_start = 1;
-
-                // Get a new chunk.
-                *processed = 0;
-                initial_processing(state);
-                chunk_size = string_size(current);
-                continue;
-            }
-        }
-
-        if (data[*processed] == '*') {
-            // We could be ending the multi line comment!
-            if (*processed < chunk_size - 1 && data[*processed + 1] == '/') {
-                *processed += 2;
-                return true;
-            }
-        }
-
-        if (data[*processed] == '\n') {
-            state->line_start++;
-            state->column_start = 1;
+            data += 3;
+            state->index += 3;
+        } else if (HAS_CHARS(1) && *data == '\r' && data[1] == '\n') {
+            data++;
+            state->index++;
         } else {
+            string_push(current, *data);
+            data++;
+            state->index++;
+            state->column_end++;
+        }
+
+        if (state->index == state->data_size) return false;
+    }
+
+    // Skip past the newline character.
+    data++;
+    state->index++;
+
+    state->line_end++;
+    state->column_end = 1;
+
+    #undef HAS_CHARS
+
+    return true;
+}
+
+static void push_token(pp_token_vector *vec, tokenizer_state *state, size_t *processed, pp_token_kind kind) {
+    static pp_token_kind last_token_kind = PP_TOK_WHITESPACE;
+
+    pp_token tok;
+    substring(&tok.data, &state->current_data, state->done, state->done + *processed);
+    tok.kind = kind;
+
+    if (last_token_kind == PP_TOK_HASH && kind == PP_TOK_IDENTIFIER) {
+        if (string_equals_ptr_size(&tok.data, "include", sizeof("include") - 1)) {
+            state->in_include = true;
+        }
+    }
+
+    tok.source.path = state->path;
+    tok.source.line = state->line_start;
+    tok.source.column = state->column_start;
+
+    pp_token_vector_push(vec, &tok);
+
+    state->column_start += *processed;
+
+    state->done += *processed;
+    *processed = 0;
+
+    if (kind != PP_TOK_WHITESPACE) {
+        last_token_kind = kind;
+    }
+}
+
+bool tokenize_line(pp_token_vector *vec, tokenizer_state *state) {
+    // Get a processed line.
+    bool result = get_processed_line(state);
+
+    size_t line_size = string_size(&state->current_data);
+    const char *data = string_data(&state->current_data);
+    size_t processed = 0;
+
+    // So, our line is ine "state->current_data"
+    if (state->in_multiline_comment) {
+        // We still are in some multiline comment, skip until we find the end (if we do)
+        while (processed + state->done < line_size - 1) {
+            if (data[processed + state->done] == '*' && data[processed + state->done + 1] == '/') {
+                state->in_multiline_comment = false;
+                processed += 2;
+                state->column_start += 2;
+                break;
+            }
+
             state->column_start++;
+            processed++;
         }
 
-        (*processed)++;
+        // We couldn't get out yet.
+        // However, no line left :O
+        if (state->in_multiline_comment && !result) {
+            sc_error(false, "Multi line comment until end of file :/");
+            return result;
+        }
     }
 
-    assert(false);
-    return false;
-}
-
-void next_token(pp_token *token, tokenizer_state *state) {
-    if (state->found_eof) {
-        token->kind = PP_TOK_EOF;
-        return;
-    }
-
-    string *current = &state->current_data;
-    size_t chunk_size = string_size(current);
-
-    const char *data;
-    size_t processed;
-
-    // TODO: What happens if we pull an exmpty chunk? Should check and repull.
-token_start:
-    if (state->done == chunk_size) {
-        // Pull some processed data to tokenize.
-        // Note that chunks end with whitespace or newlines, so we may need to pull more data in many cases.
-        initial_processing(state);
-        chunk_size = string_size(current);
-    }
-
-    data = string_data(current) + state->done;
+    data += state->done + processed;
     processed = 0;
 
-    // Token prologue
-    token->whitespace = false;
-    token->source.path = state->path;
-    token->source.line = state->line_start;
-    token->source.column = state->column_start;
+    #define HAS_CHARS(N) (state->done + processed + N < line_size)
+    #define DATA(N) (data[processed + N])
 
-    #define PEEK_CHAR data[0]
-    #define ADD_CHAR { data++; processed++; state->column_start++; }
-    #define HAS_CHAR (processed + state->done < chunk_size)
-    #define PULL_CHUNK { initial_processing(state); chunk_size = string_size(current); processed = 0; data = string_data(current); }
+    bool in_strliteral = false;
+    bool in_charliteral = false;
+    bool in_incheader = false;
 
-    // Check for null terminator.
-    if (PEEK_CHAR == '\0') {
-        // We should be at EOF, check
-        if (state->index != state->data_size) {
-            sc_error(false, "Stray null terminator in input...");
-            state->done++;
-            goto token_start;
-        } else {
-            state->found_eof = true;
-            token->kind = PP_TOK_EOF;
-        }
-    }
-    // Let's start with newlines
-    else if (PEEK_CHAR == '\r') {
-        ADD_CHAR;
-        if (!HAS_CHAR || PEEK_CHAR != '\n') {
-            sc_error(false, "Expected \\n after \\r...");
-            state->done += processed;
-            goto token_start;
-        } else {
-            ADD_CHAR;
-            state->line_start++;
-            state->column_start = 1;
-            token->kind = PP_TOK_NEWLINE;
-        }
-    } else if (PEEK_CHAR == '\n') {
-        // Simple newline!
-        ADD_CHAR;
-        state->line_start++;
-        state->column_start = 1;
-        token->kind = PP_TOK_NEWLINE;
-    } else if (is_whitespace(PEEK_CHAR)) {
-        // Skip whitespace.
-        ADD_CHAR;
-        while (HAS_CHAR && is_whitespace(PEEK_CHAR)) {
-            ADD_CHAR;
-        }
-
-        // Next token please!
-        state->done += processed;
-        processed = 0;
-        goto token_start;
-    } else if (is_ident_start(PEEK_CHAR)) {
-        // Identifiers
-        ADD_CHAR;
-
-        while (HAS_CHAR && is_ident_char(PEEK_CHAR)) {
-            ADD_CHAR;
-        }
-
-        token->kind = PP_TOK_IDENTIFIER;
-    }
-    // Punctuators
-    else if (PEEK_CHAR == '#') {
-        ADD_CHAR;
-        if (HAS_CHAR && PEEK_CHAR == '#') {
-            ADD_CHAR;
-            token->kind = PP_TOK_DOUBLEHASH;
-        } else {
-            token->kind = PP_TOK_HASH;
-        }
-    } else if (PEEK_CHAR == '.') {
-        ADD_CHAR;
-        if (HAS_CHAR && isdigit(PEEK_CHAR)) {
-            goto do_number;
-        } else {
-            token->kind = PP_TOK_DOT;
-        }
-    } else if (PEEK_CHAR == '-') {
-        ADD_CHAR;
-        if (HAS_CHAR && PEEK_CHAR == '>') {
-            ADD_CHAR;
-            token->kind = PP_TOK_ARROW;
-        } else if (HAS_CHAR && PEEK_CHAR == '-') {
-            ADD_CHAR;
-            token->kind = PP_TOK_DECREMENT;
-        } else if (HAS_CHAR && PEEK_CHAR == '=') {
-            ADD_CHAR;
-            token->kind = PP_TOK_MINUS_ASSIGN;
-        } else {
-            token->kind = PP_TOK_MINUS;
-        }
-    } else if (PEEK_CHAR == ',') {
-        ADD_CHAR;
-        token->kind = PP_TOK_COMMA;
-    } else if (PEEK_CHAR == '?') {
-        ADD_CHAR;
-        token->kind = PP_TOK_QUESTION_MARK;
-    } else if (PEEK_CHAR == '=') {
-        ADD_CHAR;
-        if (HAS_CHAR && PEEK_CHAR == '=') {
-            ADD_CHAR;
-            token->kind = PP_TOK_EQUALS;
-        } else {
-            token->kind = PP_TOK_ASSIGN;
-        }
-    } else if (PEEK_CHAR == '+') {
-        ADD_CHAR;
-        if (HAS_CHAR && PEEK_CHAR == '+') {
-            ADD_CHAR;
-            token->kind = PP_TOK_INCREMENT;
-        } else if (HAS_CHAR && PEEK_CHAR == '=') {
-            ADD_CHAR;
-            token->kind = PP_TOK_PLUS_ASSIGN;
-        } else {
-            token->kind = PP_TOK_PLUS;
-        }
-    } else if (PEEK_CHAR == '*') {
-        ADD_CHAR;
-        if (HAS_CHAR && PEEK_CHAR == '=') {
-            ADD_CHAR;
-            token->kind = PP_TOK_STAR_ASSIGN;
-        } else {
-            token->kind = PP_TOK_STAR;
-        }
-    } else if (PEEK_CHAR == '/') {
-        ADD_CHAR;
-        if (HAS_CHAR && PEEK_CHAR == '=') {
-            ADD_CHAR;
-            token->kind = PP_TOK_DIV_ASSIGN;
-        } else if (HAS_CHAR && PEEK_CHAR == '/') {
-            // Single line comment.
-            ADD_CHAR;
-            if (!skip_singleline(state, &processed)) {
-                token->kind = PP_TOK_EOF;
-                state->found_eof = true;
+    while (state->done + processed < line_size) {
+        if (state->in_multiline_comment) {
+            if (HAS_CHARS(1) && DATA(0) == '*' && DATA(1) == '/') {
+                state->in_multiline_comment = false;
+                state->column_start += 2;
+                processed += 2;
             } else {
-                state->done += processed;
-                goto token_start;
+                state->column_start++;
+                processed++;
             }
-        } else if (HAS_CHAR && PEEK_CHAR == '*') {
-            // Multi line comment.
-            ADD_CHAR;
-            if (!skip_multiline(state, &processed)) {
-                sc_error(false, "Multi line comment not closed (ends at end of file).");
-                token->kind = PP_TOK_EOF;
-                state->found_eof = true;
-            } else {
-                state->done += processed;
-                goto token_start;
+        }
+        // Not in a multi line comment or string literal currently
+        else if (!in_strliteral && !in_charliteral && !in_incheader && !state->in_include) {
+            // Let's check for single-line comments first.
+            if (HAS_CHARS(1) && DATA(0) == '/' && DATA(1) == '/') {
+                // Ok, we can just add a whitespace character and peace out.
+                processed += 2;
+                push_token(vec, state, &processed, PP_TOK_WHITESPACE);
+                return result;
             }
-        } else {
-            token->kind = PP_TOK_DIV;
-        }
-    } else if (PEEK_CHAR == '%') {
-        ADD_CHAR;
-        if (HAS_CHAR && PEEK_CHAR == '=') {
-            ADD_CHAR;
-            token->kind = PP_TOK_MOD_ASSIGN;
-        } else if (HAS_CHAR && PEEK_CHAR == '>') {
-            ADD_CHAR;
-            token->kind = PP_TOK_CLOSE_BRACKET;
-        } else if (HAS_CHAR && PEEK_CHAR == ':') {
-            ADD_CHAR;
-            // Check for double hash here.
-            if (HAS_CHAR && PEEK_CHAR == '#') {
-                ADD_CHAR;
-                token->kind = PP_TOK_DOUBLEHASH;
-            } else if (HAS_CHAR && PEEK_CHAR == '%' && processed + state->done < chunk_size - 1 && data[1] == ':') {
-                ADD_CHAR; ADD_CHAR;
-                token->kind = PP_TOK_DOUBLEHASH;
-            } else {
-                token->kind = PP_TOK_HASH;
+            // Let's check for multi-line comments here.
+            else if (HAS_CHARS(1) && DATA(0) == '/' && DATA(1) == '*') {
+                state->in_multiline_comment = true;
+                state->column_start += 2;
+                processed += 2;
             }
-        } else {
-            token->kind = PP_TOK_MOD;
-        }
-    } else if (PEEK_CHAR == '!') {
-        ADD_CHAR;
-        if (HAS_CHAR && PEEK_CHAR == '=') {
-            ADD_CHAR;
-            token->kind = PP_TOK_NOT_EQUALS;
-        } else {
-            token->kind = PP_TOK_LOGICAL_NOT;
-        }
-    } else if (PEEK_CHAR == '>') {
-        ADD_CHAR;
-        if (HAS_CHAR && PEEK_CHAR == '=') {
-            ADD_CHAR;
-            token->kind = PP_TOK_GREATER_EQUALS;
-        } else if (HAS_CHAR && PEEK_CHAR == '>') {
-            ADD_CHAR;
-            if (HAS_CHAR && PEEK_CHAR == '=') {
-                ADD_CHAR;
-                token->kind = PP_TOK_RIGHT_SHIFT_ASSIGN;
-            } else {
-                token->kind = PP_TOK_RIGHT_SHIFT;
+            // Let's check for string literals.
+            else if (DATA(0) == '"') {
+                in_strliteral = true;
             }
-        } else {
-            token->kind = PP_TOK_GREATER;
-        }
-    } else if (PEEK_CHAR == '<') {
-        ADD_CHAR;
-        if (HAS_CHAR && PEEK_CHAR == '=') {
-            ADD_CHAR;
-            token->kind = PP_TOK_LESS_EQUALS;
-        } else if (HAS_CHAR && PEEK_CHAR == '<') {
-            ADD_CHAR;
-            if (HAS_CHAR && PEEK_CHAR == '=') {
-                ADD_CHAR;
-                token->kind = PP_TOK_LEFT_SHIFT_ASSIGN;
-            } else {
-                token->kind = PP_TOK_LEFT_SHIFT;
+            // And character literals.
+            else if (DATA(0) == '\'') {
+                in_charliteral = true;
             }
-        } else {
-            token->kind = PP_TOK_LESS;
-        }
-    } else if (PEEK_CHAR == '&') {
-        ADD_CHAR;
-        if (HAS_CHAR && PEEK_CHAR == '=') {
-            ADD_CHAR;
-            token->kind = PP_TOK_BITWISE_AND_ASSIGN;
-        } else if (HAS_CHAR && PEEK_CHAR == '&') {
-            ADD_CHAR;
-            token->kind = PP_TOK_LOGICAL_AND;
-        } else {
-            token->kind = PP_TOK_BITWISE_AND;
-        }
-    } else if (PEEK_CHAR == '|') {
-        ADD_CHAR;
-        if (HAS_CHAR && PEEK_CHAR == '=') {
-            ADD_CHAR;
-            token->kind = PP_TOK_BITWISE_OR_ASSIGN;
-        } else if (HAS_CHAR && PEEK_CHAR == '|') {
-            ADD_CHAR;
-            token->kind = PP_TOK_LOGICAL_OR;
-        } else {
-            token->kind = PP_TOK_BITWISE_OR;
-        }
-    } else if (PEEK_CHAR == '~') {
-        ADD_CHAR;
-        token->kind = PP_TOK_BITWISE_NOT;
-    } else if (PEEK_CHAR == '^') {
-        ADD_CHAR;
-        if (HAS_CHAR && PEEK_CHAR == '=') {
-            ADD_CHAR;
-            token->kind = PP_TOK_BITWISE_XOR_ASSIGN;
-        } else {
-            token->kind = PP_TOK_BITWISE_XOR;
-        }
-    } else if (PEEK_CHAR == '[') {
-        ADD_CHAR;
-        token->kind = PP_TOK_OPEN_SQUARE_BRACKET;
-    } else if (PEEK_CHAR == ']') {
-        ADD_CHAR;
-        token->kind = PP_TOK_CLOSE_SQUARE_BRACKET;
-    } else if (PEEK_CHAR == '{') {
-        ADD_CHAR;
-        token->kind = PP_TOK_OPEN_BRACKET;
-    } else if (PEEK_CHAR == '}') {
-        ADD_CHAR;
-        token->kind = PP_TOK_CLOSE_BRACKET;
-    } else if (PEEK_CHAR == '(') {
-        ADD_CHAR;
-        token->kind = PP_TOK_OPEN_PAREN;
-    } else if (PEEK_CHAR == ')') {
-        ADD_CHAR;
-        token->kind = PP_TOK_CLOSE_PAREN;
-    } else if (PEEK_CHAR == ';') {
-        ADD_CHAR;
-        token->kind = PP_TOK_SEMICOLON;
-    } else if (isdigit(PEEK_CHAR)) {
-    do_number:
-        ADD_CHAR;
-        token->kind = PP_TOK_NUMBER;
-        
-        // We accept any alphanumerical character, dots, underscores and exponents.
-        while (true) {
-            if (!HAS_CHAR) break;
-            if (!is_ident_char(PEEK_CHAR) && PEEK_CHAR != '.') break;
-            if (PEEK_CHAR == 'e' || PEEK_CHAR == 'E' || PEEK_CHAR == 'p' || PEEK_CHAR == 'P') {
-                ADD_CHAR;
-                // Accept + or -
-                if (HAS_CHAR && (PEEK_CHAR == '+' || PEEK_CHAR == '-')) {
-                    ADD_CHAR;
+            // Let's skip whitespace
+            else if (is_whitespace(DATA(0))) {
+                processed++;
+                while (HAS_CHARS(0) && is_whitespace(DATA(0))) { processed++; }
+                push_token(vec, state, &processed, PP_TOK_WHITESPACE);
+            }
+            // Identifiers
+            else if (is_ident_start(DATA(0))) {
+                processed++;
+                while (HAS_CHARS(0) && is_ident_char(DATA(0))) { processed++; }
+                push_token(vec, state, &processed, PP_TOK_IDENTIFIER);
+            }
+            // Punctuators
+            else if (DATA(0) == '#') {
+                processed++;
+                if (HAS_CHARS(0) && DATA(0) == '#') {
+                    processed++;
+                    push_token(vec, state, &processed, PP_TOK_DOUBLEHASH);
+                } else {
+                    push_token(vec, state, &processed, PP_TOK_HASH);
                 }
-            } else ADD_CHAR;
-        }
-
-        // Then include header (sseparate function called from the preprocessor)
-        // Then string literals (keep whitespace, give chunks until we either hit newline or closing quote)
-        // Then character literals (same as above)
-        // Then the rest
-    }
-
-    // Token epilogue
-    assert(processed != 0);
-    // Copy over the part that concerns the token.
-    substring(&token->data, current, state->done, state->done + processed);
-    state->done += processed;
-    processed = 0;
-
-    // Check if we are followed by whitespace and annotate it.
-    if (HAS_CHAR && is_whitespace(PEEK_CHAR)) {
-        ADD_CHAR;
-        token->whitespace = true;
-    
-        while (HAS_CHAR && is_whitespace(PEEK_CHAR)) {
-            ADD_CHAR;
-        }
-    }
-
-    // Check for comments.
-    if (HAS_CHAR && PEEK_CHAR == '/') {
-        if (processed + state->done < chunk_size - 1 && data[1] == '/') {
-            // Single line comment!
-            ADD_CHAR;
-            ADD_CHAR;
-            if (!skip_singleline(state, &processed)) {
-                state->found_eof = true;
+            } else if (DATA(0) == '-') {
+                processed++;
+                if (HAS_CHARS(0) && DATA(0) == '>') {
+                    processed++;
+                    push_token(vec, state, &processed, PP_TOK_ARROW);
+                } else if (HAS_CHARS(0) && DATA(0) == '-') {
+                    processed++;
+                    push_token(vec, state, &processed, PP_TOK_DECREMENT);
+                } else if (HAS_CHARS(0) && DATA(0) == '=') {
+                    processed++;
+                    push_token(vec, state, &processed, PP_TOK_MINUS_ASSIGN);
+                } else {
+                    push_token(vec, state, &processed, PP_TOK_MINUS);
+                }
+            } else if (DATA(0) == ',') {
+                processed++;
+                push_token(vec, state, &processed, PP_TOK_COMMA);
+            } else if (DATA(0) == '?') {
+                processed++;
+                push_token(vec, state, &processed, PP_TOK_QUESTION_MARK);
+            } else if (DATA(0) == '=') {
+                processed++;
+                if (HAS_CHARS(0) && DATA(0) == '=') {
+                    processed++;
+                    push_token(vec, state, &processed, PP_TOK_EQUALS);
+                } else {
+                    push_token(vec, state, &processed, PP_TOK_ASSIGN);
+                }
+            } else if (DATA(0) == '+') {
+                processed++;
+                if (HAS_CHARS(0) && DATA(0) == '+') {
+                    processed++;
+                    push_token(vec, state, &processed, PP_TOK_INCREMENT);
+                } else if (HAS_CHARS(0) && DATA(0) == '=') {
+                    processed++;
+                    push_token(vec, state, &processed, PP_TOK_PLUS_ASSIGN);
+                } else {
+                    push_token(vec, state, &processed, PP_TOK_PLUS);
+                }
+            } else if (DATA(0) == '*') {
+                processed++;
+                if (HAS_CHARS(0) && DATA(0) == '=') {
+                    processed++;
+                    push_token(vec, state, &processed, PP_TOK_STAR_ASSIGN);
+                } else {
+                    push_token(vec, state, &processed, PP_TOK_STAR);
+                }
+            } else if (DATA(0) == '/') {
+                processed++;
+                if (HAS_CHARS(0) && DATA(0) == '=') {
+                    processed++;
+                    push_token(vec, state, &processed, PP_TOK_DIV_ASSIGN);
+                } else {
+                    push_token(vec, state, &processed, PP_TOK_DIV);
+                }
+            } else if (DATA(0) == '%') {
+                processed++;
+                if (HAS_CHARS(0) && DATA(0) == '=') {
+                    processed++;
+                    push_token(vec, state, &processed, PP_TOK_MOD_ASSIGN);
+                } else if (HAS_CHARS(0) && DATA(0) == '>') {
+                    processed++;
+                    push_token(vec, state, &processed, PP_TOK_CLOSE_BRACKET);
+                } else if (HAS_CHARS(0) && DATA(0) == ':') {
+                    processed++;
+                    // Check if we have another one of those.
+                    if (HAS_CHARS(1) && DATA(0) == '%' && DATA(1) == ':') {
+                        processed += 2;
+                        push_token(vec, state, &processed, PP_TOK_DOUBLEHASH);
+                    } else if (HAS_CHARS(0) && DATA(0) == '#') {
+                        processed++;
+                        push_token(vec, state, &processed, PP_TOK_DOUBLEHASH);
+                    } else {
+                        push_token(vec, state, &processed, PP_TOK_HASH);
+                    }
+                } else {
+                    push_token(vec, state, &processed, PP_TOK_MOD);
+                }
+            } else if (DATA(0) == '!') {
+                processed++;
+                if (HAS_CHARS(0) && DATA(0) == '=') {
+                    processed++;
+                    push_token(vec, state, &processed, PP_TOK_NOT_EQUALS);
+                } else {
+                    push_token(vec, state, &processed, PP_TOK_LOGICAL_NOT);
+                }
+            } else if (DATA(0) == '>') {
+                // TODO: DIGRAPHS HERE
+                processed++;
+                if (HAS_CHARS(0) && DATA(0) == '=') {
+                    processed++;
+                    push_token(vec, state, &processed, PP_TOK_GREATER_EQUALS);
+                } else if (HAS_CHARS(1) && DATA(0) == '>' && DATA(1) == '=') {
+                    processed += 2;
+                    push_token(vec, state, &processed, PP_TOK_RIGHT_SHIFT_ASSIGN);
+                } else if (HAS_CHARS(0) && DATA(0) == '>') {
+                    processed++;
+                    push_token(vec, state, &processed, PP_TOK_RIGHT_SHIFT);
+                } else {
+                    push_token(vec, state, &processed, PP_TOK_GREATER);
+                }
+            } else if (DATA(0) == '<') {
+                processed++;
+                if (HAS_CHARS(0) && DATA(0) == '=') {
+                    processed++;
+                    push_token(vec, state, &processed, PP_TOK_LESS_EQUALS);
+                } else if (HAS_CHARS(1) && DATA(0) == '<' && DATA(1) == '=') {
+                    processed += 2;
+                    push_token(vec, state, &processed, PP_TOK_LEFT_SHIFT_ASSIGN);
+                } else if (HAS_CHARS(0) && DATA(0) == '<') {
+                    processed++;
+                    push_token(vec, state, &processed, PP_TOK_LEFT_SHIFT);
+                } else {
+                    push_token(vec, state, &processed, PP_TOK_LESS);
+                }
+            } else if (DATA(0) == '&') {
+                processed++;
+                if (HAS_CHARS(0) && DATA(0) == '=') {
+                    processed++;
+                    push_token(vec, state, &processed, PP_TOK_BITWISE_AND_ASSIGN);
+                } else if (HAS_CHARS(0) && DATA(0) == '&') {
+                    processed++;
+                    push_token(vec, state, &processed, PP_TOK_LOGICAL_AND);
+                } else {
+                    push_token(vec, state, &processed, PP_TOK_BITWISE_AND);
+                }
+            } else if (DATA(0) == '|') {
+                processed++;
+                if (HAS_CHARS(0) && DATA(0) == '=') {
+                    processed++;
+                    push_token(vec, state, &processed, PP_TOK_BITWISE_OR_ASSIGN);
+                } else if (HAS_CHARS(0) && DATA(0) == '|') {
+                    processed++;
+                    push_token(vec, state, &processed, PP_TOK_LOGICAL_OR);
+                } else {
+                    push_token(vec, state, &processed, PP_TOK_BITWISE_OR);
+                }
+            } else if (DATA(0) == '~') {
+                processed++;
+                push_token(vec, state, &processed, PP_TOK_BITWISE_NOT);
+            } else if (DATA(0) == '^') {
+                processed++;
+                if (HAS_CHARS(0) && DATA(0) == '=') {
+                    processed++;
+                    push_token(vec, state, &processed, PP_TOK_BITWISE_XOR_ASSIGN);
+                } else {
+                    push_token(vec, state, &processed, PP_TOK_BITWISE_XOR);
+                }
+            } else if (DATA(0) == '[') {
+                processed++;
+                push_token(vec, state, &processed, PP_TOK_OPEN_SQUARE_BRACKET);
+            } else if (DATA(0) == ']') {
+                processed++;
+                push_token(vec, state, &processed, PP_TOK_CLOSE_SQUARE_BRACKET);
+            } else if (DATA(0) == '{') {
+                processed++;
+                push_token(vec, state, &processed, PP_TOK_OPEN_BRACKET);
+            } else if (DATA(0) == '}') {
+                processed++;
+                push_token(vec, state, &processed, PP_TOK_CLOSE_BRACKET);
+            } else if (DATA(0) == '(') {
+                processed++;
+                push_token(vec, state, &processed, PP_TOK_OPEN_PAREN);
+            } else if (DATA(0) == ')') {
+                processed++;
+                push_token(vec, state, &processed, PP_TOK_CLOSE_PAREN);
+            } else if (DATA(0) == ';') {
+                processed++;
+                push_token(vec, state, &processed, PP_TOK_SEMICOLON);
+            } else if (DATA(0) == ':') {
+                processed++;
+                push_token(vec, state, &processed, PP_TOK_COLON);
+            } else if (DATA(0) == '.') {
+                processed++;
+                if (HAS_CHARS(0) && isdigit(DATA(0))) {
+                    goto do_number;
+                } else {
+                    push_token(vec, state, &processed, PP_TOK_DOT);
+                }
+            } else if (isdigit(DATA(0))) {
+            do_number:
+                processed++;
+                while (HAS_CHARS(0) && (is_ident_char(DATA(0)) || DATA(0) == '.')) {
+                    processed++;
+                    if (DATA(-1) == 'e' || DATA(-1) == 'E' || DATA(-1) == 'p' || DATA(-1) == 'P') {
+                        if (HAS_CHARS(0) && (DATA(0) == '+' || DATA(0) == '-')) {
+                            processed++;
+                        }
+                    }
+                }
+                push_token(vec, state, &processed, PP_TOK_NUMBER);
             }
-            token->whitespace = true;
-        } else if (processed + state->done < chunk_size - 1 && data[1] == '*') {
-            // Multi line comment!
-            ADD_CHAR;
-            ADD_CHAR;
-            if (!skip_multiline(state, &processed)) {
-                state->found_eof = true;
+        } else if (in_strliteral) {
+            if (HAS_CHARS(1) && DATA(0) == '\\' && DATA(1) == '"') {
+                // Escaped quote.
+                processed += 2;
+            } else if (DATA(0) == '"') {
+                // Finished with the string literal.
+                processed++;
+                // Push the token out.
+                push_token(vec, state, &processed, PP_TOK_STR_LITERAL);
+                in_strliteral = false;
+            } else {
+                processed++;
             }
-            token->whitespace = true;
+        } else if (in_charliteral) {
+            if (HAS_CHARS(1) && DATA(0) == '\\' && DATA(1) == '\'') {
+                // Escaped tick
+                processed += 2;
+            } else if (DATA(0) == '\'') {
+                processed++;
+                push_token(vec, state, &processed, PP_TOK_CHAR_CONST);
+                in_charliteral = false;
+            } else {
+                processed++;
+            }
+        } else if (state->in_include) {
+            // Hello there!
+            // Let's skip some whitespace.
+            if (is_whitespace(DATA(0))) {
+                processed++;
+                while (HAS_CHARS(0) && is_whitespace(DATA(0))) { processed++; }
+                push_token(vec, state, &processed, PP_TOK_WHITESPACE);
+            }
+
+            if (HAS_CHARS(0)) {
+                if (DATA(0) == '"') {
+                    processed++;
+                    while (HAS_CHARS(0)) {
+                        if (DATA(0) == '"') {
+                            // No quote escapes in header includes.
+                            processed++;
+                            push_token(vec, state, &processed, PP_TOK_HEADER_NAME);
+                            break;
+                        }
+                        processed++;
+                    }
+                    if (!HAS_CHARS(0) && processed != 0) {
+                        sc_error(false, "Relative include doesn't close in its line...");
+                    }
+                } else if (DATA(0) == '<') {
+                    processed++;
+                    while (HAS_CHARS(0)) {
+                        if (DATA(0) == '>') {
+                            processed++;
+                            push_token(vec, state, &processed, PP_TOK_HEADER_NAME);
+                            break;
+                        }
+                        processed++;
+                    }
+                    if (!HAS_CHARS(0) && processed != 0) {
+                        sc_error(false, "Absolute include doesn't close in its line...");
+                    }
+                }
+            }
+            // We can get here without an error, if we do something like #include MACRO.
+            state->in_include = false;
         }
     }
 
-    state->done += processed;
+    if (in_strliteral || in_charliteral) {
+        sc_error(false, "In line %d, malformed %s literal (missing ending seprator)", state->line_start, in_strliteral ? "string" : "character");
+    }
 
-    #undef PULL_CHUNK
-    #undef HAS_CHAR
-    #undef ADD_CHAR
-    #undef PEEK_CHAR
+    #undef DATA
+    #undef HAS_CHARS
+
+    return result;
 }
 
 void tokenizer_state_init(tokenizer_state *state, sc_file_cache_handle handle) {
@@ -571,5 +512,6 @@ void tokenizer_state_init(tokenizer_state *state, sc_file_cache_handle handle) {
     state->data_size = handle_to_file(handle)->size;
     string_init(&state->current_data, 0);
     state->done = 0;
-    state->found_eof = false;
+    state->in_multiline_comment = false;
+    state->in_include = false;
 }

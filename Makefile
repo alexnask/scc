@@ -27,7 +27,7 @@ libsc_alloc: sc_alloc.o
 libsc_io: sc_logging.o sc_file_io.o
 	ar -rcs $(LIBDIR)/libsc_io.a $(addprefix $(OBJDIR)/, $^)
 
-scpre: tokenizer.o strings.o scpre.o
+scpre: tokenizer.o strings.o scpre.o token_vector.o
 	$(CC) -o $(BINDIR)/scpre $(addprefix $(OBJDIR)/, $^) -lsc_io -lsc_alloc $(CFLAGS) $(LTO) -I$(INCLUDEDIR) -L$(LIBDIR)
 
 clean:

@@ -3,19 +3,19 @@
 
 #include <tokenizer.h>
 
-typedef struct token_vector {
-    token *memory;
+typedef struct pp_token_vector {
+    pp_token *memory;
     size_t size;
     size_t capacity;
-} token_vector;
+} pp_token_vector;
 
-bool token_vector_is_empty(token_vector *vector);
-void token_vector_init_empty(token_vector *vector);
-void token_vector_init(token_vector *vector, size_t initial_capacity);
+bool pp_token_vector_is_empty(pp_token_vector *vector);
+void pp_token_vector_init_empty(pp_token_vector *vector);
+void pp_token_vector_init(pp_token_vector *vector, size_t initial_capacity);
 // Copies the token into the token vector memory.
-void token_vector_push(token_vector *vector, const token *token);
-void token_vector_destroy(token_vector *vector);
+void pp_token_vector_push(pp_token_vector *vector, const pp_token *token);
+void pp_token_vector_destroy(pp_token_vector *vector);
 
-void token_vector_push_all(token_vector *dest, const token_vector * const src);
+void pp_token_vector_push_all(pp_token_vector *dest, const pp_token_vector * const src);
 
 #endif

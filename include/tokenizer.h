@@ -68,12 +68,12 @@ typedef enum pp_token_kind {
     PP_TOK_OPEN_PAREN,
     PP_TOK_CLOSE_PAREN,
     PP_TOK_SEMICOLON,
+    PP_TOK_COLON, // <------ DO THIS
     // This isn't specified by the standard but at this point we need it.
-    PP_TOK_NEWLINE,
     PP_TOK_OTHER,
     // Cannot be read.
     PP_TOK_PLACEMARKER,
-    PP_TOK_EOF
+    PP_TOK_WHITESPACE
 } pp_token_kind;
 
 typedef struct pp_token {
@@ -85,8 +85,6 @@ typedef struct pp_token {
         size_t column;
     } source;
 
-    // Whether there is whitespace after the token.
-    bool whitespace;
     string data;
 } pp_token;
 
@@ -111,13 +109,14 @@ typedef struct tokenizer_state {
     // How many bytes out of the current_data have been processed.
     size_t done;
 
-    // Whether we've reached EOF.
-    // Always return PP_TOK_EOF with uninitialized strings after that
-    bool found_eof;
+    bool in_multiline_comment;
+    bool in_include;
 } tokenizer_state;
 
 void tokenizer_state_init(tokenizer_state *state, sc_file_cache_handle handle);
-void next_token(pp_token *token, tokenizer_state *state);
+
+struct pp_token_vector;
+bool tokenize_line(struct pp_token_vector *vec, tokenizer_state *state);
 
 // TODO: Token type
 // With these source kinds: file, define
