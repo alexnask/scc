@@ -175,7 +175,6 @@ bool tokenize_line(pp_token_vector *vec, tokenizer_state *state) {
 
     bool in_strliteral = false;
     bool in_charliteral = false;
-    bool in_incheader = false;
 
     while (state->done + processed < line_size) {
         if (state->in_multiline_comment) {
@@ -189,7 +188,7 @@ bool tokenize_line(pp_token_vector *vec, tokenizer_state *state) {
             }
         }
         // Not in a multi line comment or string literal currently
-        else if (!in_strliteral && !in_charliteral && !in_incheader && !state->in_include) {
+        else if (!in_strliteral && !in_charliteral && !state->in_include) {
             // Let's check for single-line comments first.
             if (HAS_CHARS(1) && DATA(0) == '/' && DATA(1) == '/') {
                 // Ok, we can just add a whitespace character and peace out.
@@ -205,10 +204,12 @@ bool tokenize_line(pp_token_vector *vec, tokenizer_state *state) {
             }
             // Let's check for string literals.
             else if (DATA(0) == '"') {
+                processed++;
                 in_strliteral = true;
             }
             // And character literals.
             else if (DATA(0) == '\'') {
+                processed++;
                 in_charliteral = true;
             }
             // Let's skip whitespace
@@ -444,6 +445,8 @@ bool tokenize_line(pp_token_vector *vec, tokenizer_state *state) {
             if (HAS_CHARS(1) && DATA(0) == '\\' && DATA(1) == '\'') {
                 // Escaped tick
                 processed += 2;
+            } else if (HAS_CHARS(1) && DATA(0) == '\\' && DATA(1) == '\\') {
+                processed += 2;
             } else if (DATA(0) == '\'') {
                 processed++;
                 push_token(vec, state, &processed, PP_TOK_CHAR_CONST);
@@ -452,13 +455,17 @@ bool tokenize_line(pp_token_vector *vec, tokenizer_state *state) {
                 processed++;
             }
         } else if (state->in_include) {
-            // Hello there!
+            // TODO: Errors if we don't find closing character are broken (I think)
+            // (Doesn't report some)
+
             // Let's skip some whitespace.
             if (is_whitespace(DATA(0))) {
                 processed++;
                 while (HAS_CHARS(0) && is_whitespace(DATA(0))) { processed++; }
                 push_token(vec, state, &processed, PP_TOK_WHITESPACE);
             }
+
+            state->in_include = false;
 
             if (HAS_CHARS(0)) {
                 if (DATA(0) == '"') {
@@ -490,13 +497,11 @@ bool tokenize_line(pp_token_vector *vec, tokenizer_state *state) {
                     }
                 }
             }
-            // We can get here without an error, if we do something like #include MACRO.
-            state->in_include = false;
         }
     }
 
     if (in_strliteral || in_charliteral) {
-        sc_error(false, "In line %d, malformed %s literal (missing ending seprator)", state->line_start, in_strliteral ? "string" : "character");
+        sc_error(false, "In line %d, malformed %s literal (missing ending separator)", state->line_start, in_strliteral ? "string" : "character");
     }
 
     #undef DATA

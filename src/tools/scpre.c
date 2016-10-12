@@ -23,7 +23,7 @@ int main(int argc, char *argv[]) {
     while(tokenize_line(&line_vec, &state)) {
         for (size_t i = 0; i < line_vec.size; i++) {
             if (line_vec.memory[i].kind != PP_TOK_WHITESPACE) {
-                printf("%s\n", string_data(&line_vec.memory[i].data));
+                printf("%d: %s\n", line_vec.memory[i].kind, string_data(&line_vec.memory[i].data));
             }
         }
         line_vec.size = 0;

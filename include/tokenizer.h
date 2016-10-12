@@ -68,7 +68,7 @@ typedef enum pp_token_kind {
     PP_TOK_OPEN_PAREN,
     PP_TOK_CLOSE_PAREN,
     PP_TOK_SEMICOLON,
-    PP_TOK_COLON, // <------ DO THIS
+    PP_TOK_COLON,
     // This isn't specified by the standard but at this point we need it.
     PP_TOK_OTHER,
     // Cannot be read.
