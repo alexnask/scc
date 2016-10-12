@@ -1,7 +1,6 @@
 #include <tokenizer.h>
 #include <token_vector.h>
 #include <ctype.h>
-#include <string.h>
 
 // Newlines != whitespace
 static bool is_whitespace(const char c) {
@@ -113,7 +112,12 @@ static void push_token(pp_token_vector *vec, tokenizer_state *state, size_t *pro
     static pp_token_kind last_token_kind = PP_TOK_WHITESPACE;
 
     pp_token tok;
-    substring(&tok.data, &state->current_data, state->done, state->done + *processed);
+    if (*processed == 0) {
+        string_init(&tok.data, 0);
+    } else {
+        substring(&tok.data, &state->current_data, state->done, state->done + *processed);
+    }
+
     tok.kind = kind;
 
     if (last_token_kind == PP_TOK_HASH && kind == PP_TOK_IDENTIFIER) {
@@ -149,16 +153,17 @@ bool tokenize_line(pp_token_vector *vec, tokenizer_state *state) {
     // So, our line is ine "state->current_data"
     if (state->in_multiline_comment) {
         // We still are in some multiline comment, skip until we find the end (if we do)
-        while (processed + 1 < line_size) {
-            if (data[processed] == '*' && data[processed] == '/') {
+        while (state->done + 1 < line_size) {
+            if (data[state->done] == '*' && data[state->done + 1] == '/') {
                 state->in_multiline_comment = false;
-                processed += 2;
+                state->done += 2;
+                state->column_start += 2;
                 push_token(vec, state, &processed, PP_TOK_WHITESPACE);
                 break;
             }
 
             state->column_start++;
-            processed++;
+            state->done++;
         }
 
         // We couldn't get out yet.
@@ -168,9 +173,6 @@ bool tokenize_line(pp_token_vector *vec, tokenizer_state *state) {
             return result;
         }
     }
-
-    state->done += processed;
-    processed = 0;
 
     #define HAS_CHARS(N) (state->done + processed + N < line_size)
     #define DATA(N) (data[state->done + processed + N])
