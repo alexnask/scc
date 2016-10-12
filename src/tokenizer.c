@@ -93,7 +93,7 @@ static bool get_processed_line(tokenizer_state *state) {
             state->column_end++;
         }
 
-        if (state->index == state->data_size) return false;
+        if (state->index >= state->data_size) return false;
     }
 
     // Skip past the newline character.
@@ -153,7 +153,7 @@ bool tokenize_line(pp_token_vector *vec, tokenizer_state *state) {
                 state->in_multiline_comment = false;
                 processed += 2;
                 state->column_start += 2;
-                break;
+                push_token(vec, state, &processed, PP_TOK_WHITESPACE);
             }
 
             state->column_start++;
@@ -424,6 +424,9 @@ bool tokenize_line(pp_token_vector *vec, tokenizer_state *state) {
                     }
                 }
                 push_token(vec, state, &processed, PP_TOK_NUMBER);
+            } else {
+                processed++;
+                push_token(vec, state, &processed, PP_TOK_OTHER);
             }
         } else if (in_strliteral) {
             if (HAS_CHARS(1) && DATA(0) == '\\' && DATA(1) == '"') {

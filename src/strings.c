@@ -14,6 +14,8 @@ static void _string_upgrade(string *str, size_t initial_size) {
     assert(is_small_string(str));
 
     str->normal.size = initial_size;
+    // TODO: Remove this line, it's just set so that the !is_small_string assert in string_normal_set_capacity doesn't fire.
+    str->raw_data[LAST_CHAR] = 0xFF;
     string_normal_set_capacity(str, initial_size);
     str->normal.data = malloc(initial_size + 1);
     str->normal.data[initial_size] = '\0';
@@ -59,9 +61,13 @@ void string_normal_set_capacity(string *str, size_t new_cap) {
 void string_init(string *str, size_t size) {
     if (size <= LAST_CHAR) {
         // We can use a small string!
+        // TODO: Remove this (?)
+        str->raw_data[LAST_CHAR] = 0;
         set_small_string_size(str, size);
     } else {
         // Ok, we need to allocate.
+        // TODO: Remove this (?)
+        str->raw_data[LAST_CHAR] = 0;
         _string_upgrade(str, size);
     }
 }
@@ -101,11 +107,7 @@ void string_resize(string *str, size_t new_size) {
 
 void string_append_ptr_size(string *str, const char * const data, size_t size) {
     size_t old_size = string_size(str);
-    if (old_size + size > string_capacity(str)) {
-        // We need to resize to fit.
-        string_resize(str, old_size + size);
-    }
-
+    string_resize(str, old_size + size);
     // Copy our data over.
     memcpy(string_data(str) + old_size, data, size);
 }
