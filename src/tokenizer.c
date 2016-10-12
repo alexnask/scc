@@ -426,7 +426,6 @@ bool tokenize_line(pp_token_vector *vec, tokenizer_state *state) {
                 }
                 push_token(vec, state, &processed, PP_TOK_NUMBER);
             } else {
-                printf("Unrecognized character with character code %d at line %lu, column %lu\n", DATA(0), state->line_start, state->column_start);
                 processed++;
                 push_token(vec, state, &processed, PP_TOK_OTHER);
             }
