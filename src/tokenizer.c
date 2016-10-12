@@ -149,11 +149,12 @@ bool tokenize_line(pp_token_vector *vec, tokenizer_state *state) {
     // So, our line is ine "state->current_data"
     if (state->in_multiline_comment) {
         // We still are in some multiline comment, skip until we find the end (if we do)
-        while (processed + state->done < line_size - 1) {
-            if (data[processed + state->done] == '*' && data[processed + state->done + 1] == '/') {
+        while (processed + 1 < line_size) {
+            if (data[processed] == '*' && data[processed] == '/') {
                 state->in_multiline_comment = false;
                 processed += 2;
                 push_token(vec, state, &processed, PP_TOK_WHITESPACE);
+                break;
             }
 
             state->column_start++;
@@ -458,9 +459,6 @@ bool tokenize_line(pp_token_vector *vec, tokenizer_state *state) {
                 processed++;
             }
         } else if (state->in_include) {
-            // TODO: Errors if we don't find closing character are broken (I think)
-            // (Doesn't report some)
-
             // Let's skip some whitespace.
             if (is_whitespace(DATA(0))) {
                 processed++;
