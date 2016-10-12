@@ -152,7 +152,6 @@ bool tokenize_line(pp_token_vector *vec, tokenizer_state *state) {
             if (data[processed + state->done] == '*' && data[processed + state->done + 1] == '/') {
                 state->in_multiline_comment = false;
                 processed += 2;
-                state->column_start += 2;
                 push_token(vec, state, &processed, PP_TOK_WHITESPACE);
             }
 
@@ -168,11 +167,11 @@ bool tokenize_line(pp_token_vector *vec, tokenizer_state *state) {
         }
     }
 
-    data += state->done + processed;
+    state->done += processed;
     processed = 0;
 
     #define HAS_CHARS(N) (state->done + processed + N < line_size)
-    #define DATA(N) (data[processed + N])
+    #define DATA(N) (data[state->done + processed + N])
 
     bool in_strliteral = false;
     bool in_charliteral = false;
