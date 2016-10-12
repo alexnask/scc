@@ -93,7 +93,8 @@ static bool get_processed_line(tokenizer_state *state) {
             state->column_end++;
         }
 
-        if (state->index >= state->data_size) return false;
+        // We check against -1 so as not to include the terminating null.
+        if (state->index == state->data_size - 1) return false;
     }
 
     // Skip past the newline character.
@@ -425,12 +426,15 @@ bool tokenize_line(pp_token_vector *vec, tokenizer_state *state) {
                 }
                 push_token(vec, state, &processed, PP_TOK_NUMBER);
             } else {
+                printf("Unrecognized character with character code %d at line %lu, column %lu\n", DATA(0), state->line_start, state->column_start);
                 processed++;
                 push_token(vec, state, &processed, PP_TOK_OTHER);
             }
         } else if (in_strliteral) {
             if (HAS_CHARS(1) && DATA(0) == '\\' && DATA(1) == '"') {
                 // Escaped quote.
+                processed += 2;
+            } else if (HAS_CHARS(1) && DATA(0) == '\\' && DATA(1) == '\\') {
                 processed += 2;
             } else if (DATA(0) == '"') {
                 // Finished with the string literal.

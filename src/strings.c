@@ -13,12 +13,16 @@
 static void _string_upgrade(string *str, size_t initial_size) {
     assert(is_small_string(str));
 
+    char swap_buffer[LAST_CHAR];
+    memcpy(swap_buffer, str->raw_data, LAST_CHAR);
+
     str->normal.size = initial_size;
-    // TODO: Remove this line, it's just set so that the !is_small_string assert in string_normal_set_capacity doesn't fire.
-    str->raw_data[LAST_CHAR] = 0xFF;
     string_normal_set_capacity(str, initial_size);
     str->normal.data = malloc(initial_size + 1);
     str->normal.data[initial_size] = '\0';
+
+    // Copy over our original data.
+    memcpy(str->normal.data, swap_buffer, LAST_CHAR);
 }
 
 bool is_small_string(string *str) {
@@ -52,8 +56,6 @@ void set_small_string_size(string *str, size_t new_size) {
 }
 
 void string_normal_set_capacity(string *str, size_t new_cap) {
-    assert(!is_small_string(str));
-
     // This cast + shift + or keeps the first bit of the last capacity byte set.
     str->normal.capacity = new_cap | ((size_t)(CATEGORY_MASK) << CATEGORY_SHIFT);
 }
