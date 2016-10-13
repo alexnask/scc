@@ -1,27 +1,46 @@
 #ifndef PREPROCESSOR_H__
 #define PREPROCESSOR_H__
 
-#include <sc_alloc.h>
 #include <token_vector.h>
 
-typedef struct preprocessing_state {
-    token *current;
-    tokenizer_state *tok_state;
-    token_vector *tok_vec;
-    size_t if_nesting;
-    // When this is set to true, ignore_until_nesting indicates the level of nesting we are skipping up to.
+typedef struct pp_branch {
+    size_t nesting;
     bool ignoring;
-    size_t ignore_until_nesting;
-    // Set by #line
-    int line_diff;
-    const char *path_overwrite;
-} preprocessing_state;
+} pp_branch;
 
-void init_preprocessor(sc_path_table *table, sc_allocator *alloc);
-void release_preprocessor();
+typedef struct preprocessor_state {
+    // This is switched then reset on #includes
+    tokenizer_state *tok_state;
+    token_vector *translation_unit;
 
-// This is called recursively.
-void preprocess(const char *file_path, token_vector *tok_vec);
+    pp_token_vector *line_vec;
+
+    struct {
+        token_source *memory;
+        size_t stack_size;
+        size_t stack_capacity;
+    } source_stack;
+
+    size_t if_nesting;
+
+    struct {
+        pp_branch *memory;
+        size_t size;
+        size_t capacity;
+    } branch_stack;
+
+    define_table def_table;
+
+    // Set by #line directive
+    struct {
+        string path;
+        size_t line;
+    } line;
+} preprocessor_state;
+
+void preprocessor_state_init(preprocessor_state *state, tokenizer_state *tok_state, token_vector *translation_unit, pp_token_vector *line_vec);
+
+bool preprocess_line(preprocessor_state *state);
 
 // TODO: Public interface for defines passed through -D
 // TODO: Builtin defines

@@ -189,26 +189,24 @@ static bool get_processed_line(tokenizer_state *state) {
 static void push_token(pp_token_vector *vec, tokenizer_state *state, size_t *processed, pp_token_kind kind) {
     static pp_token_kind last_token_kind = PP_TOK_WHITESPACE;
 
-    pp_token tok;
+    pp_token *tok = pp_token_vector_tail(vec);
     if (*processed == 0) {
-        string_init(&tok.data, 0);
+        string_init(&tok->data, 0);
     } else {
-        substring(&tok.data, &state->current_data, state->done, state->done + *processed);
+        substring(&tok->data, &state->current_data, state->done, state->done + *processed);
     }
 
-    tok.kind = kind;
+    tok->kind = kind;
 
     if (last_token_kind == PP_TOK_HASH && kind == PP_TOK_IDENTIFIER) {
-        if (string_equals_ptr_size(&tok.data, "include", sizeof("include") - 1)) {
+        if (string_equals_ptr_size(&tok->data, "include", sizeof("include") - 1)) {
             state->in_include = true;
         }
     }
 
-    tok.source.path = state->path;
-    tok.source.line = state->line_start;
-    tok.source.column = state->column_start;
-
-    pp_token_vector_push(vec, &tok);
+    tok->source.path = state->path;
+    tok->source.line = state->line_start;
+    tok->source.column = state->column_start;
 
     state->column_start += *processed;
 
@@ -244,11 +242,9 @@ bool tokenize_line(pp_token_vector *vec, tokenizer_state *state) {
             state->done++;
         }
 
-        // We couldn't get out yet.
-        // However, no line left :O
         if (state->in_multiline_comment && !result) {
             tokenizer_error(state->multiline_source.index, 2, state->multiline_source.line, state->multiline_source.column, state,
-                            "Multi line comment not closed.");
+                            "Unterminated multi line comment.");
             return result;
         }
     }

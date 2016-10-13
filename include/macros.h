@@ -7,8 +7,9 @@
     #define MACRO_ARGUMENT_DECL_BLOCK_SIZE 16
 #endif
 
+// Argument decls take ownership of the argument tokens' data.
 typedef struct macro_argument_decl {
-    char **arguments;
+    string arguments;
 
     // Does not count the "varargs" argument.
     size_t argument_count;
@@ -23,31 +24,29 @@ bool macro_argument_decl_has(macro_argument_decl *decl, char *arg);
 void macro_argument_decl_add(macro_argument_decl *decl, char *arg);
 void macro_argument_decl_destroy(macro_argument_decl *decl);
 
+// Defines take ownership of the name token's data.
+// On correct redefinitions, destroy the redefinitions' strings. (as well as trhe args strings)
 typedef struct define {
-    char *define_name;
+    string define_name;
     macro_argument_decl args;
-    token_vector replacement_list;
+    pp_token_vector replacement_list;
     bool active;
 } define;
 
-void define_init_empty(define *def, char *define_name);
+void define_init_empty(define *def, string *define_name);
 void define_destroy(define *def);
 
-typedef struct define_table_t {
+typedef struct define_table {
     define *defines;
     size_t define_count;
     size_t capacity;
-} define_table_t;
+} define_table;
 
-void define_table_init();
-define *define_table_lookup(char *def_name);
-void define_table_add(define *def);
-void define_table_destroy();
+void define_table_init(define_table *table);
+define *define_table_lookup(define_table *table, string *def_name);
+void define_table_add(define_table *table, define *def);
+void define_table_destroy(define_table *table);
 
-bool define_exists(char *def_name);
-
-void add_define(preprocessing_state *state);
-void do_define(preprocessing_state *state);
-void do_undef(preprocessing_state *state);
+bool define_exists(define_table *table, string *def_name);
 
 #endif

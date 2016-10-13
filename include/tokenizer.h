@@ -129,4 +129,108 @@ bool tokenize_line(struct pp_token_vector *vec, tokenizer_state *state);
 // With these source kinds: file, define
 // Will have a source stack to track origins.
 
+typedef struct token_source {
+    enum {
+        TSRC_FILE,
+        TSRC_INCLUDE,
+        TSRC_MACRO
+    } kind;
+
+    union {
+        struct {
+            // Path to the file.
+            string path;
+            // Line and column the token originates from.
+            size_t line;
+            size_t column;
+        } file;
+
+        struct {
+            // Include path.
+            string path;
+            // Line and column of the include.
+            size_t line;
+            size_t column;
+        } include;
+
+        struct {
+            // Macro name
+            string name;
+            // Line and column of the definition of the macro.
+            size_t line;
+            size_t column;
+        } macro;
+    };
+} token_source;
+
+typedef enum token_kind {
+    TOK_KEYWORD,
+    TOK_IDENTIFIER,
+    // TODO -> Number literals,
+    TOK_CHAR_CONST,
+    TOK_STR_LITERAL,
+    TOK_DOT,
+    TOK_ARROW,
+    TOK_COMMA,
+    TOK_QUESTION_MARK,
+    TOK_ASSIGN,
+    TOK_PLUS,
+    TOK_PLUS_ASSIGN,
+    TOK_MINUS,
+    TOK_MINUS_ASSIGN,
+    TOK_STAR,
+    TOK_STAR_ASSIGN,
+    TOK_DIV,
+    TOK_DIV_ASSIGN,
+    TOK_MOD,
+    TOK_MOD_ASSIGN,
+    TOK_INCREMENT,
+    TOK_DECREMENT,
+    TOK_EQUALS,
+    TOK_NOT_EQUALS,
+    TOK_GREATER,
+    TOK_GREATER_EQUALS,
+    TOK_LESS,
+    TOK_LESS_EQUALS,
+    TOK_LOGICAL_NOT,
+    TOK_LOGICAL_AND,
+    TOK_LOGICAL_OR,
+    TOK_BITWISE_NOT,
+    TOK_BITWISE_AND,
+    TOK_BITWISE_AND_ASSIGN,
+    TOK_BITWISE_OR,
+    TOK_BITWISE_OR_ASSIGN,
+    TOK_BITWISE_XOR,
+    TOK_BITWISE_XOR_ASSIGN,
+    TOK_LEFT_SHIFT,
+    TOK_LEFT_SHIFT_ASSIGN,
+    TOK_RIGHT_SHIFT,
+    TOK_RIGHT_SHIFT_ASSIGN,
+    TOK_OPEN_SQUARE_BRACKET,
+    TOK_CLOSE_SQUARE_BRACKET,
+    TOK_OPEN_BRACKET,
+    TOK_CLOSE_BRACKET,
+    TOK_OPEN_PAREN,
+    TOK_CLOSE_PAREN,
+    TOK_SEMICOLON,
+    TOK_COLON,
+    TOK_WHITESPACE
+} token_kind;
+
+typedef struct token {
+    token_kind kind;
+
+    // Moved over from preprocessing tokens.
+    string data;
+
+    token_source *source_stack;
+    size_t stack_size;
+
+    // Set by #line directive.
+    struct {
+        string path;
+        size_t line;
+    } line;
+} token;
+
 #endif

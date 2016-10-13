@@ -66,7 +66,8 @@ string_view view(string *src, long int start, long int end);
 
 void string_destroy(string *str);
 
-#define STRING_FROM_LITERAL(S,L) string_from_ptr_size(&S, L, sizeof(L) - 1);
+#define STRING_EQUALS_LITERAL(S, L) string_equals_ptr_size(S, L, sizeof(L) - 1)
+#define STRING_FROM_LITERAL(S, L) string_from_ptr_size(S, L, sizeof(L) - 1);
 // For use in function calls to expand a string view into a pointer + size argument.
 // Note you can use do something like SV2PS(*view) if you have a pointer.
 // Will cause double evaluation of SV, meant for use with variables or derefed variables.
