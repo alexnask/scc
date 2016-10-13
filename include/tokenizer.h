@@ -69,7 +69,6 @@ typedef enum pp_token_kind {
     PP_TOK_CLOSE_PAREN,
     PP_TOK_SEMICOLON,
     PP_TOK_COLON,
-    // This isn't specified by the standard but at this point we need it.
     PP_TOK_OTHER,
     // Cannot be read.
     PP_TOK_PLACEMARKER,
@@ -220,7 +219,7 @@ typedef enum token_kind {
 typedef struct token {
     token_kind kind;
 
-    // Moved over from preprocessing tokens.
+    // Copied over from preprocessing tokens.
     string data;
 
     token_source *source_stack;
