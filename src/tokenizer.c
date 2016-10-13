@@ -1,6 +1,7 @@
 #include <tokenizer.h>
 #include <token_vector.h>
 #include <ctype.h>
+#include <string.h>
 
 // Newlines != whitespace
 static bool is_whitespace(const char c) {
@@ -13,6 +14,83 @@ static bool is_ident_start(const char c) {
 
 static bool is_ident_char(const char c) {
     return is_ident_start(c) || isdigit(c);
+}
+
+static void tokenizer_error(size_t index, size_t length, size_t line, size_t column, tokenizer_state *state, const char *error) {
+    // So, we will take the pointer into the data and make a region of 10 characters to the left of it to 10 characters to the right of it.
+    // If we hit a newline in those 10 characters, go until the newline (not including).
+    // If we are not in whitespace after those 10 characters, go until whitespace or newline (unless we overflow buffer).
+    const char *error_ptr = state->data + index;
+
+    size_t start_off = index >= 10 ? 10 : index;
+    size_t end_off = state->data_size - index - length >= 10 ? 10 : state->data_size - index - length;
+
+    const char *start = error_ptr - start_off;
+    const char *end = error_ptr + end_off;
+
+    bool start_corrected = false;
+    bool end_corrected = false;
+
+    for (size_t i = start_off - 1; i >= 0; i--) {
+        if (start[i] == '\n') {
+            start = start + i + 1;
+            start_off = error_ptr - start;
+            start_corrected = true;
+            break;
+        }
+    }
+
+    for (size_t i = length; i <= length + end_off; i++) {
+        if (error_ptr[i] == '\r' || error_ptr[i] == '\n') {
+            end = error_ptr + i;
+            end_off = i;
+            end_corrected = true;
+            break;
+        }
+    }
+
+    if (!start_corrected) {
+        // Ok, let's see where we point at.
+        while (!is_whitespace(start[-1]) && start[-1] != '\n' && start_off <= index - 1) {
+            start--;
+            start_off++;
+        }
+    }
+
+    if (!end_corrected) {
+        while (!is_whitespace(end[1]) && end[1] != '\r' && end[1] != '\n' && end_off < (state->data_size - index)) {
+            end++;
+            end_off++;
+        }
+    }
+
+    // So we write: [state->path]:[line]:[column]: Error: [error]\n
+    //              [15 spaces][state->data[start_off : end_off]]\n
+    //                               ~~~~~~~~
+
+    // We assume that the numbers are 4 long at maximum
+    size_t total_length = strlen(state->path) + 51 + strlen(error) + (end_off + start_off) + (index - start_off) + length;
+
+    char space_buff[start_off + 1];
+    memset(space_buff, ' ', start_off);
+    space_buff[start_off] = '\0';
+
+    char tilde_buff[length + 1];
+    memset(tilde_buff, '~', length);
+    tilde_buff[length] = '\0';
+
+    char data_piece[end_off + start_off + 1];
+    memcpy(data_piece, error_ptr - start_off, end_off + start_off);
+    data_piece[end_off + start_off] = '\0';
+
+    char buff[total_length + 1];
+    snprintf(buff, total_length + 1, "%s:%lu:%lu: Error: %s\n               %s\n               %s%s\n",
+             state->path, line, column, error, data_piece, space_buff, tilde_buff);
+
+    // Just making sure.
+    buff[total_length] = '\0';
+
+    sc_error(false, buff);
 }
 
 // Returns false when we hit EOF.
@@ -169,7 +247,8 @@ bool tokenize_line(pp_token_vector *vec, tokenizer_state *state) {
         // We couldn't get out yet.
         // However, no line left :O
         if (state->in_multiline_comment && !result) {
-            sc_error(false, "Multi line comment until end of file :/");
+            tokenizer_error(state->multiline_source.index, 2, state->multiline_source.line, state->multiline_source.column, state,
+                            "Multi line comment not closed.");
             return result;
         }
     }
@@ -202,6 +281,12 @@ bool tokenize_line(pp_token_vector *vec, tokenizer_state *state) {
             }
             // Let's check for multi-line comments here.
             else if (HAS_CHARS(1) && DATA(0) == '/' && DATA(1) == '*') {
+                // Index into data to the start of the multiline comment.
+                // Used for error reporting if the comment never ends.
+                state->multiline_source.index = state->index - line_size + state->done + processed - 2;
+                state->multiline_source.line = state->line_start;
+                state->multiline_source.column = state->column_start;
+
                 state->in_multiline_comment = true;
                 state->column_start += 2;
                 processed += 2;
@@ -483,7 +568,9 @@ bool tokenize_line(pp_token_vector *vec, tokenizer_state *state) {
                         processed++;
                     }
                     if (!HAS_CHARS(0) && processed != 0) {
-                        sc_error(false, "Relative include doesn't close in its line...");
+                        // TODO: Those 2's should be 1's if we have \n instead of \r\n (I think).
+                        tokenizer_error(state->index - line_size + state->done - 2, processed,
+                                        state->line_start, state->column_start, state, "Relative include not closed on its line.");
                     }
                 } else if (DATA(0) == '<') {
                     processed++;
@@ -496,15 +583,20 @@ bool tokenize_line(pp_token_vector *vec, tokenizer_state *state) {
                         processed++;
                     }
                     if (!HAS_CHARS(0) && processed != 0) {
-                        sc_error(false, "Absolute include doesn't close in its line...");
+                        tokenizer_error(state->index - line_size + state->done - 2, processed,
+                                        state->line_start, state->column_start, state, "Absolute include not closed on its line.");
                     }
                 }
             }
         }
     }
 
-    if (in_strliteral || in_charliteral) {
-        sc_error(false, "In line %d, malformed %s literal (missing ending separator)", state->line_start, in_strliteral ? "string" : "character");
+    if (in_strliteral) {
+        tokenizer_error(state->index - line_size + state->done - 2, processed,
+                        state->line_start, state->column_start, state, "Unterminated string literal.");
+    } else if (in_charliteral) {
+        tokenizer_error(state->index - line_size + state->done - 2, processed,
+                        state->line_start, state->column_start, state, "Unterminated character literal.");
     }
 
     #undef DATA

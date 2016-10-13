@@ -109,6 +109,13 @@ typedef struct tokenizer_state {
     // How many bytes out of the current_data have been processed.
     size_t done;
 
+    // Used for error reporting.
+    struct {
+        size_t index;
+        size_t line;
+        size_t column;
+    } multiline_source;
+
     bool in_multiline_comment;
     bool in_include;
 } tokenizer_state;
