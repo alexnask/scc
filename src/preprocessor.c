@@ -1,6 +1,9 @@
 #include <preprocessor.h>
 #include <macros.h>
 
+#include <string.h>
+#include <ctype.h>
+
 static void push_token(size_t i, preprocessor_state *state);
 
 static bool is_keyword(string *data) {
@@ -36,7 +39,7 @@ static void add_branch(preprocessor_state *state, size_t nesting, bool ignoring)
 
 static void pop_branch(preprocessor_state *state) {
     assert(state->branch_stack.size > 0);
-    state->ignore_stack.size--;
+    state->branch_stack.size--;
 }
 
 static size_t latest_branch_nesting(preprocessor_state *state) {
@@ -50,7 +53,7 @@ static void latest_branch_flip(preprocessor_state *state) {
 }
 
 static bool ignoring(preprocessor_state *state) {
-    return state->ignore_stack.size > 0 && state->ignore_stack.memory[state->ignore_stack.size - 1].ignoring;
+    return state->branch_stack.size > 0 && state->branch_stack.memory[state->branch_stack.size - 1].ignoring;
 }
 
 static void do_ifdef(bool must_be_defined, size_t index, preprocessor_state *state) {
@@ -162,7 +165,7 @@ static void handle_directive(size_t index, preprocessor_state *state) {
             for (size_t i = 0; i < vec->size; i++) {
                 string_append(&str, &tokens[i].data);
             }
-            sc_error(false, string_data(str));
+            sc_error(false, string_data(&str));
             string_destroy(&str);
         } else if (IS("line")) {
             index++;
@@ -174,9 +177,9 @@ static void handle_directive(size_t index, preprocessor_state *state) {
             }
 
             // Steal the token's data.
-            const char *num_data = string_data(tokens[index].data);
+            const char *num_data = string_data(&tokens[index].data);
             // Parse it to an integer, if we can.
-            for (size_t i = 0; i < string_size(num); i++) {
+            for (size_t i = 0; i < string_size(&tokens[index].data); i++) {
                 if (!isdigit(num_data[i])) {
                     sc_error(false, "Expected a decimal line number in #line directive.");
                     return;
@@ -184,7 +187,7 @@ static void handle_directive(size_t index, preprocessor_state *state) {
             }
 
             // TODO: Write our own, better version (with bounds/error checking, faster [see folly talk])...
-            state->line.line = strtoull(num_data);
+            state->line.line = strtoull(num_data, NULL, 10);
 
             index++;
             skip_whitespace(&index, vec);
@@ -216,7 +219,7 @@ static void handle_directive(size_t index, preprocessor_state *state) {
             if (entry && entry->active) {
                 entry->active = false;
             } else {
-                sc_warning("Called #undef on non-defined macro '%s'", string_data(&toknes[index].data));
+                sc_warning("Called #undef on non-defined macro '%s'", string_data(&tokens[index].data));
             }
         }
     }
@@ -270,7 +273,7 @@ bool preprocess_line(preprocessor_state *state) {
 
 void push_token(size_t i, preprocessor_state *state) {
     assert(i < state->line_vec->size);
-    pp_token *src = state->line_vec->memory[i];
+    pp_token *src = &state->line_vec->memory[i];
     token *dest = token_vector_tail(state->translation_unit);
 
     assert(src->kind != PP_TOK_HEADER_NAME && src->kind != PP_TOK_PLACEMARKER);
@@ -290,7 +293,7 @@ void push_token(size_t i, preprocessor_state *state) {
         .file.column = src->source.column
     };
     // TODO: Number parsing, string and character escaping and other fun stuff.
-    string_from_ptr_size(&dest->source_stack[state->source_stack.stack_size].file.path, str->source.path, strlen(str->source.path));
+    string_from_ptr_size(&dest->source_stack[state->source_stack.stack_size].file.path, src->source.path, strlen(src->source.path));
     string_copy(&dest->data, &src->data);
 
     // Pass over #line set stuff.
@@ -318,8 +321,8 @@ void preprocessor_state_init(preprocessor_state *state, tokenizer_state *tok_sta
 
     // Default starting stack of 32 elements.
     state->source_stack.memory = malloc(32 * sizeof(token_source));
-    state->source_stack.size = 0;
-    state->source_stack.capacity = 32;
+    state->source_stack.stack_size = 0;
+    state->source_stack.stack_capacity = 32;
 
     state->if_nesting = 0;
 

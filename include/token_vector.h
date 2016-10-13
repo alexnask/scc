@@ -28,6 +28,6 @@ void token_vector_init(token_vector *vector, size_t initial_capacity);
 void token_vector_push(token_vector *vector, const token *token);
 void token_vector_destroy(token_vector *vector);
 // Gives a pointer to a new element to be constructed like the caller sees fit.
-token *token_vector_anchor(token_vector *vector);
+token *token_vector_tail(token_vector *vector);
 
 #endif

@@ -1,7 +1,8 @@
 #ifndef MACROS_H__
 #define MACROS_H__
 
-#include <preprocessor.h>
+#include <strings.h>
+#include <token_vector.h>
 
 #ifndef MACRO_ARGUMENT_DECL_BLOCK_SIZE
     #define MACRO_ARGUMENT_DECL_BLOCK_SIZE 16
@@ -9,7 +10,7 @@
 
 // Argument decls take ownership of the argument tokens' data.
 typedef struct macro_argument_decl {
-    string arguments;
+    string *arguments;
 
     // Does not count the "varargs" argument.
     size_t argument_count;
@@ -20,8 +21,8 @@ typedef struct macro_argument_decl {
 bool macro_argument_decl_is_empty(macro_argument_decl *decl);
 void macro_argument_decl_init_empty(macro_argument_decl *decl);
 void macro_argument_decl_init(macro_argument_decl *decl);
-bool macro_argument_decl_has(macro_argument_decl *decl, char *arg);
-void macro_argument_decl_add(macro_argument_decl *decl, char *arg);
+bool macro_argument_decl_has(macro_argument_decl *decl, string *arg);
+void macro_argument_decl_add(macro_argument_decl *decl, string *arg);
 void macro_argument_decl_destroy(macro_argument_decl *decl);
 
 // Defines take ownership of the name token's data.

@@ -1,14 +1,15 @@
 // The SCC preprocessor as an executable.
-#include <token_vector.h>
+#include <preprocessor.h>
 #include <stdio.h>
 
 int main(int argc, char *argv[]) {
-    if (argc < 2) {
-        printf("Usage: %s <input file>\n", argv[0]);
+    if (argc < 3) {
+        printf("Usage: %s <input file> <output file>\n", argv[0]);
         return 0;
     }
 
     char *in_path = argv[1];
+    char *out_path = argv[2];
 
     sc_file_cache cache;
     file_cache_init(&cache, mallocator());
@@ -20,16 +21,30 @@ int main(int argc, char *argv[]) {
     pp_token_vector line_vec;
     pp_token_vector_init(&line_vec, 128);
 
+    // We'll go line by line to append newlines for a more human readable form.
+    token_vector translation_line;
+    token_vector_init(&translation_line, 128);
+
+    preprocessor_state pp_state;
+    preprocessor_state_init(&pp_state, &state, &translation_line, &line_vec);
+
+    FILE *out = fopen(out_path, "w");
+
     bool ok = true;
     while (ok) {
-        ok = tokenize_line(&line_vec, &state);
-        for (size_t i = 0; i < line_vec.size; i++) {
-            if (line_vec.memory[i].kind != PP_TOK_WHITESPACE) {
-                printf("%d: %s\n", line_vec.memory[i].kind, string_data(&line_vec.memory[i].data));
-            }
+        ok = preprocess_line(&pp_state);
+        for (size_t i = 0; i < translation_line.size; i++) {
+            fwrite(string_data(&translation_line.memory[i].data), 1, string_size(&translation_line.memory[i].data), out);
         }
-        line_vec.size = 0;
+        if (translation_line.size != 0) {
+            // Write a newline!
+            putc('\n', out);
+        }
+
+        translation_line.size = 0;
     }
+
+    fclose(out);
 
     return 0;
 }

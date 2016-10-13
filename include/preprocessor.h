@@ -1,6 +1,7 @@
 #ifndef PREPROCESSOR_H__
 #define PREPROCESSOR_H__
 
+#include <macros.h>
 #include <token_vector.h>
 
 typedef struct pp_branch {
