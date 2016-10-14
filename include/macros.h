@@ -32,6 +32,12 @@ typedef struct define {
     macro_argument_decl args;
     pp_token_vector replacement_list;
     bool active;
+
+    struct {
+        string path;
+        size_t line;
+        size_t column;
+    } source;
 } define;
 
 void define_init_empty(define *def, string *define_name);
@@ -49,5 +55,8 @@ void define_table_add(define_table *table, define *def);
 void define_table_destroy(define_table *table);
 
 bool define_exists(define_table *table, string *def_name);
+
+struct preprocessor_state;
+void do_define(size_t index, struct preprocessor_state *state);
 
 #endif

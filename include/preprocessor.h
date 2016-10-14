@@ -41,6 +41,7 @@ typedef struct preprocessor_state {
 
 void preprocessor_state_init(preprocessor_state *state, tokenizer_state *tok_state, token_vector *translation_unit, pp_token_vector *line_vec);
 
+bool skip_whitespace(size_t *index, pp_token_vector *vec);
 bool preprocess_line(preprocessor_state *state);
 
 // TODO: Public interface for defines passed through -D

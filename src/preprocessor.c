@@ -19,7 +19,7 @@ static bool is_keyword(string *data) {
     #undef IS
 }
 
-static bool skip_whitespace(size_t *index, pp_token_vector *vec) {
+bool skip_whitespace(size_t *index, pp_token_vector *vec) {
     pp_token *tokens = vec->memory;
     size_t start_idx = *index;
 
@@ -81,8 +81,6 @@ static void do_ifdef(bool must_be_defined, size_t index, preprocessor_state *sta
     }
 }
 
-// TODO: Many of the skip_whitespace's NEED to happen
-// Make it return a bool and check against the return.
 static void handle_directive(size_t index, preprocessor_state *state) {
     pp_token_vector *vec = state->line_vec;
     pp_token *tokens = vec->memory;
@@ -153,12 +151,19 @@ static void handle_directive(size_t index, preprocessor_state *state) {
             // TODO;
         } else if (IS("elif")) {
             // TODO;
+        } else if (IS("define")) {
+            // Go go!
+            index++;
+            do_define(index, state);
         }
         // TODO: Add rest of directives
         // TODO: Error on unknown directive
         else if (IS("error")) {
             index++;
-            skip_whitespace(&index, vec);
+            if (!skip_whitespace(&index, vec)) {
+                sc_error(false, "Expected whitespace between #error directive and error tokens.");
+                return;
+            }
             // TODO: ERROR REPORTING
             string str;
             string_init(&str, 0);
@@ -169,7 +174,10 @@ static void handle_directive(size_t index, preprocessor_state *state) {
             string_destroy(&str);
         } else if (IS("line")) {
             index++;
-            skip_whitespace(&index, vec);
+            if (!skip_whitespace(&index, vec)) {
+                sc_error(false, "Expected whitespace between #line and line number.");
+                return;
+            }
 
             if (tokens[index].kind != PP_TOK_NUMBER) {
                 sc_error(false, "Expected line number after #line directive.");
@@ -187,11 +195,16 @@ static void handle_directive(size_t index, preprocessor_state *state) {
             }
 
             // TODO: Write our own, better version (with bounds/error checking, faster [see folly talk])...
-            state->line.line = strtoull(num_data, NULL, 10);
+            state->line.line = strtoull(num_data, NULL, 10) - 1;
 
             index++;
-            skip_whitespace(&index, vec);
+            bool skipped = skip_whitespace(&index, vec);
             if (index != vec->size) {
+                if (!skipped) {
+                    sc_error(false, "Expected withespace between #line number and #line path.");
+                    return;
+                }
+
                 if (tokens[index].kind != PP_TOK_STR_LITERAL) {
                     sc_error(false, "Expected a string literal as a second argument of the #line directive.");
                     return;
@@ -219,7 +232,7 @@ static void handle_directive(size_t index, preprocessor_state *state) {
             if (entry && entry->active) {
                 entry->active = false;
             } else {
-                sc_warning("Called #undef on non-defined macro '%s'", string_data(&tokens[index].data));
+                sc_warning("Called #undef on already undefined macro '%s'", string_data(&tokens[index].data));
             }
         }
     }
@@ -257,7 +270,6 @@ bool preprocess_line(preprocessor_state *state) {
     } else if (!ignoring(state)) {
         // Do stuff (pass over pp_tokens into tokens, check for macro substitution)
         // Also handle _Pragma
-        // Also, pass #line thingies into the tokens.
 
         // Don't do substitution or _Pragma's for now.
         // Just pass along the tokens.
@@ -266,6 +278,7 @@ bool preprocess_line(preprocessor_state *state) {
         }
     }
 
+    // Increment the "#line" counter on text lines only.
     state->line.line++;
 
     return result;
@@ -273,6 +286,7 @@ bool preprocess_line(preprocessor_state *state) {
 
 void push_token(size_t i, preprocessor_state *state) {
     assert(i < state->line_vec->size);
+
     pp_token *src = &state->line_vec->memory[i];
     token *dest = token_vector_tail(state->translation_unit);
 
@@ -292,8 +306,8 @@ void push_token(size_t i, preprocessor_state *state) {
         .file.line = src->source.line,
         .file.column = src->source.column
     };
-    // TODO: Number parsing, string and character escaping and other fun stuff.
     string_from_ptr_size(&dest->source_stack[state->source_stack.stack_size].file.path, src->source.path, strlen(src->source.path));
+    // TODO: Number parsing, string and character escaping and other fun stuff.
     string_copy(&dest->data, &src->data);
 
     // Pass over #line set stuff.
@@ -333,5 +347,5 @@ void preprocessor_state_init(preprocessor_state *state, tokenizer_state *tok_sta
     define_table_init(&state->def_table);
 
     string_init(&state->line.path, 0);
-    state->line.line = 1;
+    state->line.line = 0;
 }

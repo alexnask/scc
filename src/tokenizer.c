@@ -259,8 +259,11 @@ bool tokenize_line(pp_token_vector *vec, tokenizer_state *state) {
         if (state->in_multiline_comment) {
             if (HAS_CHARS(1) && DATA(0) == '*' && DATA(1) == '/') {
                 state->in_multiline_comment = false;
+                state->done += processed + 2;
+                processed = 0;
                 state->column_start += 2;
-                processed += 2;
+                push_token(vec, state, &processed, PP_TOK_WHITESPACE);
+                continue;
             } else {
                 state->column_start++;
                 processed++;
