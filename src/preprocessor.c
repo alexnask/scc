@@ -238,12 +238,7 @@ bool preprocess_line(preprocessor_state *state) {
 
     bool result = tokenize_line(state->line_vec, state->tok_state);
 
-    // Skip any leading and trailing whitespace.
-    size_t idx;
-    // Leading whitespace.
-    for (idx = 0; idx < vec->size && tokens[idx].kind == PP_TOK_WHITESPACE; idx++) {}
-    // Trailing whitespace.
-    for (; vec->size >= 0 && tokens[vec->size - 1].kind == PP_TOK_WHITESPACE; vec->size--) {}
+    size_t idx = 0;
 
     if (tokens[idx].kind == PP_TOK_HASH) {
         // Preprocessor directive.

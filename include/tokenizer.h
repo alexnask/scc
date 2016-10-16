@@ -6,7 +6,6 @@
 
 // TODO: Remove whitespace token type, add a has_whitespace flag on the token types.
 typedef enum pp_token_kind {
-    PP_TOK_WHITESPACE,
     PP_TOK_HEADER_NAME,
     PP_TOK_IDENTIFIER,
     PP_TOK_NUMBER,

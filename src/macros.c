@@ -295,9 +295,6 @@ void do_define(size_t index, preprocessor_state *state) {
 
                     i++;
 
-                    // We have to skip whitespace here
-                    for (; i < new_def.replacement_list.size && new_def.replacement_list.memory[i].kind == PP_TOK_WHITESPACE; i++);
-
                     if (new_def.replacement_list.memory[i].kind != PP_TOK_IDENTIFIER) {
                         sc_error(false, "The '#' operator must be followed by an argument identifier in a function like macro replacement list.");
                         define_destroy(&new_def);
