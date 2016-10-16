@@ -143,37 +143,23 @@ static bool macro_defs_compatible(define *left, define *right) {
     size_t left_size = left->replacement_list.size;
     size_t right_size = right->replacement_list.size;
 
-    size_t left_index = 0;
-    size_t right_index = 0;
+    // We can straight up compare the lengths of the lists since whitespaces are not tokens.
+    if (left_size != right_size) return false;
 
-    while (true) {
-        // Skip whitespace of the left define, store if we did so.
-        // Do the same for the right define then check wether the tokens and whitesapce are identical.
-        // If one is done, they must both be done in addition to the token check.
-        bool left_skipped = skip_whitespace(&left_index, &left->replacement_list);
-        bool right_skipped = skip_whitespace(&right_index, &right->replacement_list);
-    
-        // If one of the two is done, too bad.
-        if ((left_index == left_size) != (right_index == right_size)) return false;
-        // For real, if we are done we should probably break out :p
-        if (left_index == left_size || right_index == right_size) break;
-
-        if (left_skipped != right_skipped) return false;
-        if (!string_equals(&left_tokens[left_index].data, &right_tokens[right_index].data)) return false;
-        left_index++;
-        right_index++;
+    for (size_t i = 0; i < left_size; i++) {
+        if (left_tokens[i].has_whitespace != right_tokens[i].has_whitespace) return false;
+        if (!string_equals(&left_tokens[i].data, &right_tokens[i].data)) return false;
     }
 
     return true;
 }
 
+// TODO: Check for builtin redefinition.
 void do_define(size_t index, preprocessor_state *state) {
     pp_token_vector *vec = state->line_vec;
     pp_token *tokens = vec->memory;
 
-    skip_whitespace(&index, vec);
-
-    if (index == vec->size || tokens[index].kind != PP_TOK_IDENTIFIER) {
+    if (tokens[index].kind != PP_TOK_IDENTIFIER) {
         sc_error(false, "Expected macro name after #define.");
         return;
     }
@@ -188,8 +174,7 @@ void do_define(size_t index, preprocessor_state *state) {
     index++;
     if (index != vec->size) {
         // Object or function like macro.
-        bool skipped = skip_whitespace(&index, vec);
-        if (tokens[index].kind == PP_TOK_OPEN_PAREN && !skipped) {
+        if (tokens[index].kind == PP_TOK_OPEN_PAREN && !tokens[index - 1].has_whitespace) {
             // Function like macro.
             index++;
 
@@ -198,24 +183,21 @@ void do_define(size_t index, preprocessor_state *state) {
 
             bool first = true;
             while (index < vec->size && tokens[index].kind != PP_TOK_CLOSE_PAREN) {
-                skip_whitespace(&index, vec);
-
                 if (first) {
                     first = false;
                 } else {
                     // Read comma.
-                    if (index == vec->size || tokens[index].kind != PP_TOK_COMMA) {
+                    if (tokens[index].kind != PP_TOK_COMMA) {
                         sc_error(false, "Expected separating comma in argument declaration list of function like macro '%s'.",
                                  string_data(&new_def.define_name));
                         define_destroy(&new_def);
                         return;
                     }
                     index++;
-                    skip_whitespace(&index, vec);
                 }
 
                 // Read argument.
-                if (index == vec->size || (tokens[index].kind != PP_TOK_IDENTIFIER && tokens[index].kind != PP_TOK_DOT)) {
+                if (tokens[index].kind != PP_TOK_IDENTIFIER && tokens[index].kind != PP_TOK_DOT) {
                     sc_error(false, "Expected argument name or varargs in argument declaration list of function like macro '%s'.",
                              string_data(&new_def.define_name));
                     define_destroy(&new_def);
@@ -223,6 +205,7 @@ void do_define(size_t index, preprocessor_state *state) {
                 }
 
                 // Ok, we may have some varargs.
+                // TODO: Check the dots don't have whitespace in between.
                 if (tokens[index].kind == PP_TOK_DOT) {
                     bool error = false;
                     if (index >= vec->size - 2) {
@@ -265,20 +248,70 @@ void do_define(size_t index, preprocessor_state *state) {
                 return;
             }
 
-            // Skip closing parenthesis
-            index++;
-
             // Check we have whitespace after closing paren.
-            if (!skip_whitespace(&index, vec)) {
-                sc_error(false, "Expected whitespace between function like macro argument list declaration and replacement list.");
+            // TODO: Something weird is happening here, index is incremented when adding arguments but back to the first argument here.
+            // (Only tested with 1 arg)
+            if (!tokens[index].has_whitespace) {
+                sc_error(false, "Expected whitespace between function like macro '%s' argument list declaration and replacement list.",
+                         string_data(&new_def.define_name));
                 define_destroy(&new_def);
                 return;
             }
+
+            // Skip closing parenthesis
+            index++;
         }
 
         // Write the replacement list!
         for (; index < vec->size; index++) {
+            if (!new_def.args.has_varargs && STRING_EQUALS_LITERAL(&tokens[index].data, "__VA_ARGS__")) {
+                sc_error(false, "The identifier __VA_ARGS__ can only appear in the replacement list of a function like variadic macro.");
+                define_destroy(&new_def);
+                return;
+            }
+
             pp_token_vector_push(&new_def.replacement_list, &tokens[index]);
+        }
+
+        // TODO: Shouldn't those be non zero anyway?
+        if (new_def.replacement_list.size > 0 && new_def.replacement_list.memory[0].kind == PP_TOK_DOUBLEHASH) {
+            sc_error(false, "The '##' operator cannot appear in the first place of a macro replacement list.");
+            define_destroy(&new_def);
+            return;
+        } else if (new_def.replacement_list.size > 0 && new_def.replacement_list.memory[new_def.replacement_list.size - 1].kind == PP_TOK_DOUBLEHASH) {
+            sc_error(false, "The '##' operator cannot appear in the last place of a macro replacement list.");
+            define_destroy(&new_def);
+            return;
+        }
+
+        if (!macro_argument_decl_is_empty(&new_def.args)) {
+            for (size_t i = 0; i < new_def.replacement_list.size; i++) {
+                if (new_def.replacement_list.memory[i].kind == PP_TOK_HASH) {
+                    if (i == new_def.replacement_list.size - 1) {
+                        sc_error(false, "The '#' operator cannot appear in the last place of a function like macro replacement list.");
+                        define_destroy(&new_def);
+                        return;
+                    }
+
+                    i++;
+
+                    // We have to skip whitespace here
+                    for (; i < new_def.replacement_list.size && new_def.replacement_list.memory[i].kind == PP_TOK_WHITESPACE; i++);
+
+                    if (new_def.replacement_list.memory[i].kind != PP_TOK_IDENTIFIER) {
+                        sc_error(false, "The '#' operator must be followed by an argument identifier in a function like macro replacement list.");
+                        define_destroy(&new_def);
+                        return;
+                    }
+
+                    if (!macro_argument_decl_has(&new_def.args, &new_def.replacement_list.memory[i].data)
+                        && !STRING_EQUALS_LITERAL(&new_def.replacement_list.memory[i].data, "__VA_ARGS__")) {
+                        sc_error(false, "The '#' operator must be followed by an argument identifier in a function like macro replacement list.");
+                        define_destroy(&new_def);
+                        return;
+                    }
+                }
+            }
         }
     }
 
@@ -294,5 +327,67 @@ void do_define(size_t index, preprocessor_state *state) {
         define_destroy(&new_def);
     } else {
         define_table_add(&state->def_table, &new_def);
+    }
+}
+
+// Fully substitutes all macros within the line_vec and pushes the resulting preprocessing tokens into a caller provided vector.
+void macro_substitution(size_t index, preprocessor_state *state, pp_token_vector *out) {
+    pp_token_vector *vec = state->line_vec;
+    pp_token *tokens = vec->memory;
+
+    // TODO: Function like macros
+    // (Requires some additional state since the call could be across multiple lines)
+
+    // TODO: Refactor this a bunch.
+
+    for (; index < vec->size; index++) {
+        if (tokens[index].kind == PP_TOK_IDENTIFIER) {
+            define *macro = define_table_lookup(&state->def_table, &tokens[index].data);
+            if (macro && macro->active) {
+                // Add macro source to the stack.
+                token_source *define_source = preprocessor_source_tail(state);
+                define_source->kind = TSRC_MACRO;
+                string_copy(&define_source->macro.name, &macro->define_name);
+                define_source->macro.line = macro->source.line;
+                define_source->macro.column = macro->source.column;
+
+                if (macro_argument_decl_is_empty(&macro->args)) {
+                    // Object like macro!
+                    pp_token_vector temp_buff;
+                    pp_token_vector_init(&temp_buff, 16);
+
+                    // Copy the replacement list and do concatenations.
+                    for (size_t i = 0; i < macro->replacement_list.size; i++) {
+                        if (i < macro->replacement_list.size - 2 && macro->replacement_list.memory[i + 1].kind == PP_TOK_DOUBLEHASH) {
+                            i += 2;
+                            pp_token tmp_tok;
+                            if (!pp_token_concatenate(&tmp_tok, &macro->replacement_list.memory[i - 2], &macro->replacement_list.memory[i])) {
+                                sc_error(false, "Could not concatenate tokens '%s' and '%s'",
+                                         string_data(&macro->replacement_list.memory[i - 2].data),
+                                         string_data(&macro->replacement_list.memory[i].data));
+                                continue;
+                            }
+                            pp_token_vector_push(&temp_buff, &tmp_tok);
+                        }
+                        else pp_token_vector_push(&temp_buff, &macro->replacement_list.memory[i]);
+                    }
+
+                    // TODO: Do more substitutions.
+
+                    for (size_t i = 0; i < temp_buff.size; i++) {
+                        pp_token_vector_push(out, &temp_buff.memory[i]);
+                    }
+
+                    pp_token_vector_destroy(&temp_buff);
+                } else {
+                    // Function like macro.
+                }
+
+                // Pop the macro source from the stack.
+                preprocessor_pop_source(state);
+                continue;
+            }
+        }
+        pp_token_vector_push(out, &tokens[index]);
     }
 }

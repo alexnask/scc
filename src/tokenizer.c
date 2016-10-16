@@ -115,6 +115,11 @@ static bool get_processed_line(tokenizer_state *state) {
             state->index += 2;
             state->line_end++;
             state->column_end = 1;
+        } else if (HAS_CHARS(2) && *data == '\\' && data[1] == '\r' && data[2] == '\n') {
+            data += 3;
+            state->index += 3;
+            state->line_end++;
+            state->column_end = 1;
         }
         // Trigraphs
         else if (HAS_CHARS(3) && *data == '?' && data[1] == '?') {
@@ -187,7 +192,7 @@ static bool get_processed_line(tokenizer_state *state) {
 }
 
 static void push_token(pp_token_vector *vec, tokenizer_state *state, size_t *processed, pp_token_kind kind) {
-    static pp_token_kind last_token_kind = PP_TOK_WHITESPACE;
+    static pp_token_kind last_token_kind = PP_TOK_PLACEMARKER;
 
     pp_token *tok = pp_token_vector_tail(vec);
     if (*processed == 0) {
@@ -199,7 +204,7 @@ static void push_token(pp_token_vector *vec, tokenizer_state *state, size_t *pro
     tok->kind = kind;
 
     if (last_token_kind == PP_TOK_HASH && kind == PP_TOK_IDENTIFIER) {
-        if (string_equals_ptr_size(&tok->data, "include", sizeof("include") - 1)) {
+        if (STRING_EQUALS_LITERAL(&tok->data, "include")) {
             state->in_include = true;
         }
     }
@@ -208,17 +213,18 @@ static void push_token(pp_token_vector *vec, tokenizer_state *state, size_t *pro
     tok->source.line = state->line_start;
     tok->source.column = state->column_start;
 
+    tok->has_whitespace = false;
+
     state->column_start += *processed;
 
     state->done += *processed;
     *processed = 0;
 
-    if (kind != PP_TOK_WHITESPACE) {
-        last_token_kind = kind;
-    }
+    last_token_kind = kind;
 }
 
 bool tokenize_line(pp_token_vector *vec, tokenizer_state *state) {
+    size_t original_vec_size = vec->size;
     // Get a processed line.
     bool result = get_processed_line(state);
 
@@ -226,15 +232,17 @@ bool tokenize_line(pp_token_vector *vec, tokenizer_state *state) {
     const char *data = string_data(&state->current_data);
     size_t processed = 0;
 
+    #define GOT_WHITESPACE { state->done += processed; state->column_start += processed; processed = 0; \
+                            if (vec->size > original_vec_size) { vec->memory[vec->size - 1].has_whitespace = true; } }
+
     // So, our line is ine "state->current_data"
     if (state->in_multiline_comment) {
         // We still are in some multiline comment, skip until we find the end (if we do)
         while (state->done + 1 < line_size) {
             if (data[state->done] == '*' && data[state->done + 1] == '/') {
                 state->in_multiline_comment = false;
-                state->done += 2;
-                state->column_start += 2;
-                push_token(vec, state, &processed, PP_TOK_WHITESPACE);
+                processed += 2;
+                GOT_WHITESPACE;
                 break;
             }
 
@@ -259,13 +267,10 @@ bool tokenize_line(pp_token_vector *vec, tokenizer_state *state) {
         if (state->in_multiline_comment) {
             if (HAS_CHARS(1) && DATA(0) == '*' && DATA(1) == '/') {
                 state->in_multiline_comment = false;
-                state->done += processed + 2;
-                processed = 0;
-                state->column_start += 2;
-                push_token(vec, state, &processed, PP_TOK_WHITESPACE);
+                processed += 2;
+                GOT_WHITESPACE;
                 continue;
             } else {
-                state->column_start++;
                 processed++;
             }
         }
@@ -273,9 +278,9 @@ bool tokenize_line(pp_token_vector *vec, tokenizer_state *state) {
         else if (!in_strliteral && !in_charliteral && !state->in_include) {
             // Let's check for single-line comments first.
             if (HAS_CHARS(1) && DATA(0) == '/' && DATA(1) == '/') {
-                // Ok, we can just add a whitespace character and peace out.
+                // Ok, we can just signal we got whitespace and peace out.
                 processed += 2;
-                push_token(vec, state, &processed, PP_TOK_WHITESPACE);
+                GOT_WHITESPACE;
                 return result;
             }
             // Let's check for multi-line comments here.
@@ -304,7 +309,8 @@ bool tokenize_line(pp_token_vector *vec, tokenizer_state *state) {
             else if (is_whitespace(DATA(0))) {
                 processed++;
                 while (HAS_CHARS(0) && is_whitespace(DATA(0))) { processed++; }
-                push_token(vec, state, &processed, PP_TOK_WHITESPACE);
+
+                GOT_WHITESPACE;
             }
             // Identifiers
             else if (is_ident_start(DATA(0))) {
@@ -549,7 +555,8 @@ bool tokenize_line(pp_token_vector *vec, tokenizer_state *state) {
             if (is_whitespace(DATA(0))) {
                 processed++;
                 while (HAS_CHARS(0) && is_whitespace(DATA(0))) { processed++; }
-                push_token(vec, state, &processed, PP_TOK_WHITESPACE);
+
+                GOT_WHITESPACE;
             }
 
             state->in_include = false;
@@ -590,6 +597,9 @@ bool tokenize_line(pp_token_vector *vec, tokenizer_state *state) {
         }
     }
 
+    // Let's consider newlines as whitespaces.
+    GOT_WHITESPACE;
+
     if (in_strliteral) {
         tokenizer_error(state->index - line_size + state->done - 2, processed,
                         state->line_start, state->column_start, state, "Unterminated string literal.");
@@ -600,6 +610,7 @@ bool tokenize_line(pp_token_vector *vec, tokenizer_state *state) {
 
     #undef DATA
     #undef HAS_CHARS
+    #undef GOT_WHITESPACE
 
     return result;
 }
@@ -615,4 +626,44 @@ void tokenizer_state_init(tokenizer_state *state, sc_file_cache_handle handle) {
     state->done = 0;
     state->in_multiline_comment = false;
     state->in_include = false;
+}
+
+bool pp_token_concatenate(pp_token *dest, pp_token *left, pp_token *right) {
+    if (right->kind == PP_TOK_PLACEMARKER) {
+        // This works even if both tokens are placemarkers!
+        pp_token_copy(dest, left);
+        return true;
+    } else if (left->kind == PP_TOK_PLACEMARKER) {
+        pp_token_copy(dest, right);
+        return true;
+    }
+
+    if (left->kind == PP_TOK_IDENTIFIER) {
+        if (right->kind != PP_TOK_IDENTIFIER && right->kind != PP_TOK_NUMBER) {
+            return false;
+        }
+
+        // TODO: does this work with all number preprocessor tokens?
+        pp_token_copy(dest, left);
+        string_append(&dest->data, &right->data);
+        return true;
+    }
+
+    if (left->kind == PP_TOK_HASH && right->kind == PP_TOK_HASH) {
+        dest->kind = PP_TOK_CONCAT_DOUBLEHASH;
+        dest->source = left->source;
+        STRING_FROM_LITERAL(&dest->data, "##");
+        return true;
+    }
+
+    // TODO: Punctuators.
+
+    return false;
+}
+
+void pp_token_copy(pp_token *dest, pp_token *src) {
+    dest->kind = src->kind;
+    dest->source = src->source;
+    dest->has_whitespace = src->has_whitespace;
+    string_copy(&dest->data, &src->data);
 }

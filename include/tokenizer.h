@@ -4,18 +4,9 @@
 #include <strings.h>
 #include <sc_io.h>
 
-/* 
-    preprocessing-token:
-    header-name
-    identifier
-    pp-number
-    character-constant
-    string-literal
-    punctuator
-    each non-white-space character that cannot be one of the above
-*/
-
+// TODO: Remove whitespace token type, add a has_whitespace flag on the token types.
 typedef enum pp_token_kind {
+    PP_TOK_WHITESPACE,
     PP_TOK_HEADER_NAME,
     PP_TOK_IDENTIFIER,
     PP_TOK_NUMBER,
@@ -72,7 +63,8 @@ typedef enum pp_token_kind {
     PP_TOK_OTHER,
     // Cannot be read.
     PP_TOK_PLACEMARKER,
-    PP_TOK_WHITESPACE
+    // '##' resulting from a token concatenation, which is not actually an operator.
+    PP_TOK_CONCAT_DOUBLEHASH
 } pp_token_kind;
 
 typedef struct pp_token {
@@ -85,7 +77,15 @@ typedef struct pp_token {
     } source;
 
     string data;
+    bool has_whitespace;
 } pp_token;
+
+// TODO: Destroy function.
+
+// true on success, false on failure.
+// Must result in a single preprocessing token.
+bool pp_token_concatenate(pp_token *dest, pp_token *left, pp_token *right);
+void pp_token_copy(pp_token *dest, pp_token *src);
 
 typedef struct tokenizer_state {
     // File path
@@ -212,8 +212,7 @@ typedef enum token_kind {
     TOK_OPEN_PAREN,
     TOK_CLOSE_PAREN,
     TOK_SEMICOLON,
-    TOK_COLON,
-    TOK_WHITESPACE
+    TOK_COLON
 } token_kind;
 
 typedef struct token {
@@ -230,6 +229,9 @@ typedef struct token {
         string path;
         size_t line;
     } line;
+
+    // Is the token followed by whitespace?
+    bool has_whitespace;
 } token;
 
 #endif

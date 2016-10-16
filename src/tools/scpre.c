@@ -35,6 +35,9 @@ int main(int argc, char *argv[]) {
         ok = preprocess_line(&pp_state);
         for (size_t i = 0; i < translation_line.size; i++) {
             fwrite(string_data(&translation_line.memory[i].data), 1, string_size(&translation_line.memory[i].data), out);
+            if (i < translation_line.size - 1 && translation_line.memory[i].has_whitespace) {
+                putc(' ', out);
+            }
         }
         if (translation_line.size != 0) {
             // Write a newline!

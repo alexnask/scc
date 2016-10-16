@@ -58,5 +58,6 @@ bool define_exists(define_table *table, string *def_name);
 
 struct preprocessor_state;
 void do_define(size_t index, struct preprocessor_state *state);
+void macro_substitution(size_t index, struct preprocessor_state *state, pp_token_vector *out);
 
 #endif

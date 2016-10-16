@@ -4,7 +4,7 @@
 #include <string.h>
 #include <ctype.h>
 
-static void push_token(size_t i, preprocessor_state *state);
+static void push_token(pp_token *src, preprocessor_state *state);
 
 static bool is_keyword(string *data) {
     #define IS(L) STRING_EQUALS_LITERAL(data, L)
@@ -17,14 +17,6 @@ static bool is_keyword(string *data) {
         || IS("_Bool") || IS("_Complex") || IS("_Generic") || IS("_Imaginary") || IS("_Noreturn") || IS("_Static_assert")
         || IS("_Thread_local");
     #undef IS
-}
-
-bool skip_whitespace(size_t *index, pp_token_vector *vec) {
-    pp_token *tokens = vec->memory;
-    size_t start_idx = *index;
-
-    for (; *index < vec->size && tokens[*index].kind == PP_TOK_WHITESPACE; (*index)++) {}
-    return *index != start_idx;
 }
 
 static void add_branch(preprocessor_state *state, size_t nesting, bool ignoring) {
@@ -63,8 +55,6 @@ static void do_ifdef(bool must_be_defined, size_t index, preprocessor_state *sta
     pp_token *tokens = vec->memory;
 
     state->if_nesting++;
-
-    skip_whitespace(&index, vec);
 
     if (index == vec->size || tokens[index].kind != PP_TOK_IDENTIFIER) {
         sc_error(false, "Expected macro name after #%s", must_be_defined ? "ifdef" : "ifndef");
@@ -159,11 +149,12 @@ static void handle_directive(size_t index, preprocessor_state *state) {
         // TODO: Add rest of directives
         // TODO: Error on unknown directive
         else if (IS("error")) {
-            index++;
-            if (!skip_whitespace(&index, vec)) {
+            if (!tokens[index].has_whitespace) {
                 sc_error(false, "Expected whitespace between #error directive and error tokens.");
                 return;
             }
+
+            index++;
             // TODO: ERROR REPORTING
             string str;
             string_init(&str, 0);
@@ -173,11 +164,12 @@ static void handle_directive(size_t index, preprocessor_state *state) {
             sc_error(false, string_data(&str));
             string_destroy(&str);
         } else if (IS("line")) {
-            index++;
-            if (!skip_whitespace(&index, vec)) {
+            if (!tokens[index].has_whitespace) {
                 sc_error(false, "Expected whitespace between #line and line number.");
                 return;
             }
+
+            index++;
 
             if (tokens[index].kind != PP_TOK_NUMBER) {
                 sc_error(false, "Expected line number after #line directive.");
@@ -196,11 +188,10 @@ static void handle_directive(size_t index, preprocessor_state *state) {
 
             // TODO: Write our own, better version (with bounds/error checking, faster [see folly talk])...
             state->line.line = strtoull(num_data, NULL, 10) - 1;
-
             index++;
-            bool skipped = skip_whitespace(&index, vec);
+
             if (index != vec->size) {
-                if (!skipped) {
+                if (!tokens[index - 1].has_whitespace) {
                     sc_error(false, "Expected withespace between #line number and #line path.");
                     return;
                 }
@@ -221,7 +212,6 @@ static void handle_directive(size_t index, preprocessor_state *state) {
             }
         } else if (IS("undef")) {
             index++;
-            skip_whitespace(&index, vec);
 
             if (index == vec->size || tokens[index].kind != PP_TOK_IDENTIFIER) {
                 sc_error(false, "Expected macro name as argument of #undef.");
@@ -259,8 +249,6 @@ bool preprocess_line(preprocessor_state *state) {
         // Preprocessor directive.
         idx++;
 
-        skip_whitespace(&idx, vec);
-
         // No op.
         if (idx == vec->size) {
             return result;
@@ -268,14 +256,17 @@ bool preprocess_line(preprocessor_state *state) {
 
         handle_directive(idx, state);
     } else if (!ignoring(state)) {
-        // Do stuff (pass over pp_tokens into tokens, check for macro substitution)
-        // Also handle _Pragma
+        // TODO: Handle _Pragmas
+        // TODO: move this into preprocessor_state, don't create it each time...
+        pp_token_vector out;
+        pp_token_vector_init(&out, 16);
 
-        // Don't do substitution or _Pragma's for now.
-        // Just pass along the tokens.
-        for (size_t i = idx; i < vec->size; i++) {
-            push_token(i, state);
+        macro_substitution(idx, state, &out);
+        for (size_t i = 0; i < out.size; i++) {
+            push_token(&out.memory[i], state);
         }
+
+        pp_token_vector_destroy(&out);
     }
 
     // Increment the "#line" counter on text lines only.
@@ -284,21 +275,21 @@ bool preprocess_line(preprocessor_state *state) {
     return result;
 }
 
-void push_token(size_t i, preprocessor_state *state) {
-    assert(i < state->line_vec->size);
-
-    pp_token *src = &state->line_vec->memory[i];
+void push_token(pp_token *src, preprocessor_state *state) {
     token *dest = token_vector_tail(state->translation_unit);
 
     assert(src->kind != PP_TOK_HEADER_NAME && src->kind != PP_TOK_PLACEMARKER);
-    if (src->kind == PP_TOK_OTHER || src->kind == PP_TOK_HASH || src->kind == PP_TOK_DOUBLEHASH) {
+    if (src->kind == PP_TOK_OTHER || src->kind == PP_TOK_HASH || src->kind == PP_TOK_DOUBLEHASH || src->kind == PP_TOK_CONCAT_DOUBLEHASH) {
         sc_error(false, "Token '%s' made it out of preprocessing...", string_data(&src->data));
+        state->translation_unit->size--;
         return;
     }
 
     // Ok, lets pass over our current sources and add the default file one.
     dest->stack_size = state->source_stack.stack_size + 1;
     dest->source_stack = malloc(dest->stack_size * sizeof(token_source));
+
+    dest->has_whitespace = src->has_whitespace;
 
     memcpy(dest->source_stack, state->source_stack.memory, state->source_stack.stack_size * sizeof(token_source));
     dest->source_stack[state->source_stack.stack_size] = (token_source) {
@@ -348,4 +339,19 @@ void preprocessor_state_init(preprocessor_state *state, tokenizer_state *tok_sta
 
     string_init(&state->line.path, 0);
     state->line.line = 0;
+}
+
+token_source *preprocessor_source_tail(preprocessor_state *state) {
+    if (state->source_stack.stack_size == state->source_stack.stack_capacity) {
+        state->source_stack.stack_capacity *= 2;
+        state->source_stack.memory = realloc(state->source_stack.memory, state->source_stack.stack_capacity * sizeof(token_source));
+    }
+
+    return &state->source_stack.memory[state->source_stack.stack_size++];
+}
+
+// TODO: Destroy the source.
+void preprocessor_pop_source(preprocessor_state *state) {
+    assert(state->source_stack.stack_size > 0);
+    state->source_stack.stack_size--;
 }
