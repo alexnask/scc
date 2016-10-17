@@ -326,60 +326,291 @@ void do_define(size_t index, preprocessor_state *state) {
     }
 }
 
+// We see if such a macro exists and we aren't already substituting it
+// If peek_stack is set, we look at the top of the source stack for a macro and do not substitute if we have the same name.
+// Otherwise, we are working in a "global context" where we substitute any macro.
+static define *should_substitute(preprocessor_state *state, string *name, bool peek_stack) {
+    define *macro = define_table_lookup(&state->def_table, name);
+    if (macro && macro->active) {
+        if (peek_stack && state->source_stack.stack_size > 0) {
+            token_source *top = &state->source_stack.memory[state->source_stack.stack_size - 1];
+            if (top->kind == TSRC_MACRO && string_equals(name, &top->macro.name)) {
+                return NULL;
+            }
+        }
+
+        // Let's add the macro source to the source stack.
+        token_source *new_source = preprocessor_source_tail(state);
+        new_source->kind = TSRC_MACRO;
+        string_copy(&new_source->macro.name, name);
+        new_source->macro.line = macro->source.line;
+        new_source->macro.column = macro->source.column;
+
+        return macro;
+    }
+
+    return NULL;
+}
+static void object_macro_substitute(preprocessor_state *state, define *macro, pp_token_vector *out);
+static void inline_function_macro_call(preprocessor_state *state, define *macro, pp_token_vector *in, size_t *i, pp_token_vector *out);
+
+static void function_macro_substitute(preprocessor_state *state, define *macro, pp_token_vector *arguments, pp_token_vector *out) {
+    size_t nargs = macro->args.argument_count;
+    bool variadic = macro->args.has_varargs;
+    // Create enough token vectors for our substituted arguments.
+    pp_token_vector out_arguments[nargs + variadic ? 1 : 0];
+    // Initialize them!
+    for (size_t i = 0; i < nargs + variadic ? 1 : 0; i++) {
+        pp_token_vector_init(&out_arguments[i], 8);
+    }
+
+    // Let's do the substitution!
+    for (size_t i = 0; i < nargs + variadic ? 1 : 0; i++) {
+        pp_token_vector *in_arg = &arguments[i];
+        pp_token_vector *out_arg = &out_arguments[i];
+
+        pp_token *in_toks = in_arg->memory;
+        for (size_t j = 0; j < in_arg->size; j++) {
+            if (in_toks[j].kind == PP_TOK_IDENTIFIER) {
+                // We may need to substitute, in a global context.
+                define *inside_macro = NULL;
+                if ((inside_macro = should_substitute(state, &in_toks[j].data, false))) {
+                    if (macro_argument_decl_is_empty(&inside_macro->args)) {
+                        object_macro_substitute(state, inside_macro, out_arg);
+                    } else {
+                        if (j == in_arg->size - 1 || in_toks[j + 1].kind != PP_TOK_OPEN_PAREN) {
+                            pp_token_vector_push(out_arg, &in_toks[j]);
+                        } else {
+                            // Ok, we need to read arguments and substitute the function like macro.
+                            // Skip past the identifier and open paren tokens.
+                            j += 2;
+                            inline_function_macro_call(state, inside_macro, in_arg, &j, out_arg);
+                        }
+                    }
+
+                    preprocessor_pop_source(state);
+                } else pp_token_vector_push(out_arg, &in_toks[j]);
+            } else pp_token_vector_push(out_arg, &in_toks[j]);
+        }
+    }
+
+    // Ok, we've substituted all our arguments.
+    // Let's go ahead and pull the replacement list and do the final substitutions.
+    // TODO: LOTS of code duplication with object_macro_substitution
+    for (size_t i = 0 ; i < macro->replacement_list.size; i++) {
+        if (macro->replacement_list.memory[i].kind == PP_TOK_HASH) {
+            i++;
+            assert(i < macro->replacement_list.size);
+
+            // Do '#' operator.
+            size_t arg_index = 0;
+            if (STRING_EQUALS_LITERAL(&macro->replacement_list.memory[i].data, "__VA_ARGS__")) {
+                assert(variadic);
+                arg_index = nargs;
+            } else for (size_t arg_idx = 0; arg_idx < nargs; arg_idx++) {
+                if (string_equals(&macro->replacement_list.memory[i].data, &macro->args.arguments[arg_idx])) {
+                    arg_index = arg_idx;
+                    break;
+                }
+            }
+
+            // Ok, we have our argument index, we just have to make a string literal out of it and push it to 'out'.
+            pp_token str_lit;
+            str_lit.kind = PP_TOK_STR_LITERAL;
+            str_lit.source = macro->replacement_list.memory[i - 1].source;
+            str_lit.has_whitespace = true;
+            string_init(&str_lit.data, 0);
+            string_push(&str_lit.data, '"');
+            for (size_t j = 0; j < out_arguments[arg_index].size; j++) {
+                string_append(&str_lit.data, &out_arguments[arg_index].memory[j].data);
+                if (out_arguments[arg_index].memory[j].has_whitespace) {
+                    string_push(&str_lit.data, ' ');
+                }
+            }
+            string_push(&str_lit.data, '"');
+            // TODO: Escape string here.
+            // Push the string literal out!
+            pp_token_vector_push(out, &str_lit);
+            // Skip the argument name
+            i++;
+        }
+        // '##' operator.
+        else if (i < macro->replacement_list.size - 2 && macro->replacement_list.memory[i + 1].kind == PP_TOK_DOUBLEHASH) {
+            i += 2;
+            pp_token tmp_tok;
+            if (!pp_token_concatenate(&tmp_tok, &macro->replacement_list.memory[i - 2], &macro->replacement_list.memory[i])) {
+                sc_error(false, "Could not concatenate tokens '%s' and '%s'",
+                         string_data(&macro->replacement_list.memory[i - 2].data),
+                         string_data(&macro->replacement_list.memory[i].data));
+                continue;
+            }
+            pp_token_vector_push(out, &tmp_tok);
+        } else if (macro->replacement_list.memory[i].kind == PP_TOK_IDENTIFIER) {
+            // We may need to do a recursive substitution.
+            define *inside_macro = NULL;
+            if ((inside_macro = should_substitute(state, &macro->replacement_list.memory[i].data, true))) {
+                if (macro_argument_decl_is_empty(&inside_macro->args)) {
+                    // Another object macro, substitute it!
+                    object_macro_substitute(state, inside_macro, out);
+                } else {
+                    // Function like macro.
+                    // If it is not followed by a parenthesis, we just push the original token, since there can be no newline in a replacement list.
+                    if (i == macro->replacement_list.size - 1 || macro->replacement_list.memory[i + 1].kind != PP_TOK_OPEN_PAREN) {
+                        pp_token_vector_push(out, &macro->replacement_list.memory[i]);
+                    } else {
+                        // Ok, we need to read arguments and substitute the function like macro.
+
+                        // Skip past the identifier and open paren tokens.
+                        i += 2;
+                        inline_function_macro_call(state, inside_macro, &macro->replacement_list, &i, out);
+                    }
+                }
+                preprocessor_pop_source(state);
+            } else pp_token_vector_push(out, &macro->replacement_list.memory[i]);
+        }
+        else pp_token_vector_push(out, &macro->replacement_list.memory[i]);
+    }
+
+    // Cleanup and return.
+    for (size_t i = 0; i < nargs + variadic ? 1 : 0; i++) {
+        pp_token_vector_destroy(&out_arguments[i]);
+    }
+}
+
+static void inline_function_macro_call(preprocessor_state *state, define *macro, pp_token_vector *in, size_t *i, pp_token_vector *out) {
+    // We get here after the opening parenthesis.
+    size_t nested_paren = 0;
+    pp_token *tokens = in->memory;
+
+    // Create enough token vectors for our arguments.
+    size_t nargs = macro->args.argument_count;
+    bool variadic = macro->args.has_varargs;
+
+    pp_token_vector arguments[nargs + variadic ? 1 : 0];
+    // Initialize them!
+    for (size_t i = 0; i < nargs + variadic ? 1 : 0; i++) {
+        pp_token_vector_init(&arguments[i], 8);
+    }
+
+    size_t current_arg = 0;
+
+    while (*i < in->size && (nested_paren != 0 || tokens[*i].kind != PP_TOK_CLOSE_PAREN)) {
+        if (tokens[*i].kind == PP_TOK_OPEN_PAREN) {
+            nested_paren++;
+        } else if (tokens[*i].kind == PP_TOK_CLOSE_PAREN) {
+            nested_paren--;
+        } else if (nested_paren == 0 && tokens[*i].kind == PP_TOK_COMMA) {
+            if (current_arg < nargs - 1) {
+                current_arg++;
+                (*i)++;
+                continue;
+            } else if (current_arg == nargs - 1) {
+                if (variadic) {
+                    current_arg++;
+                    (*i)++;
+                    continue;
+                } else {
+                    sc_error(false, "Trying to pass too many arguments to non variadic function like macro '%s'",
+                             string_data(&macro->define_name));
+
+                    goto cleanup_return;
+                }
+            }
+            // If we have a comma after we got to the variadic argument, we commit it like everything else.
+        }
+
+        pp_token_vector_push(&arguments[current_arg], &tokens[(*i)++]);
+    }
+
+    if (*i == in->size || nested_paren != 0) {
+        sc_error(false, "Malformed function like macro call.");
+        goto cleanup_return;
+    }
+
+    // Skip past the closing parenthesis.
+    assert(tokens[*i].kind == PP_TOK_CLOSE_PAREN);
+    (*i)++;
+
+    // Did we set all arguments?
+    if (current_arg < nargs - 1) {
+        sc_error(false, "Trying to pass too few arguments to function like macro '%s'",
+                 string_data(&macro->define_name));
+        goto cleanup_return;
+    }
+
+    // All ok! (I think?)
+    // Actually substitute the macro.
+    function_macro_substitute(state, macro, arguments, out);
+
+cleanup_return:
+    // Cleanup and return.
+    for (size_t i = 0; i < nargs + variadic ? 1 : 0; i++) {
+        pp_token_vector_destroy(&arguments[i]);
+    }
+}
+
+static void object_macro_substitute(preprocessor_state *state, define *macro, pp_token_vector *out) {
+    assert(macro_argument_decl_is_empty(&macro->args));
+
+    // Copy the replacement list and do concatenations.
+    for (size_t i = 0; i < macro->replacement_list.size; i++) {
+        if (i < macro->replacement_list.size - 2 && macro->replacement_list.memory[i + 1].kind == PP_TOK_DOUBLEHASH) {
+            i += 2;
+            pp_token tmp_tok;
+            if (!pp_token_concatenate(&tmp_tok, &macro->replacement_list.memory[i - 2], &macro->replacement_list.memory[i])) {
+                sc_error(false, "Could not concatenate tokens '%s' and '%s'",
+                         string_data(&macro->replacement_list.memory[i - 2].data),
+                         string_data(&macro->replacement_list.memory[i].data));
+                continue;
+            }
+            pp_token_vector_push(out, &tmp_tok);
+        } else if (macro->replacement_list.memory[i].kind == PP_TOK_IDENTIFIER) {
+            // We may need to do a recursive substitution.
+            define *inside_macro = NULL;
+            if ((inside_macro = should_substitute(state, &macro->replacement_list.memory[i].data, true))) {
+                if (macro_argument_decl_is_empty(&inside_macro->args)) {
+                    // Another object macro, substitute it!
+                    object_macro_substitute(state, inside_macro, out);
+                } else {
+                    // Function like macro.
+                    // If it is not followed by a parenthesis, we just push the original token, since there can be no newline in a replacement list.
+                    if (i == macro->replacement_list.size - 1 || macro->replacement_list.memory[i + 1].kind != PP_TOK_OPEN_PAREN) {
+                        pp_token_vector_push(out, &macro->replacement_list.memory[i]);
+                    } else {
+                        // Ok, we need to read arguments and substitute the function like macro.
+
+                        // Skip past the identifier and open paren tokens.
+                        i += 2;
+                        inline_function_macro_call(state, inside_macro, &macro->replacement_list, &i, out);
+                    }
+                }
+                preprocessor_pop_source(state);
+            } else pp_token_vector_push(out, &macro->replacement_list.memory[i]);
+        }
+        else pp_token_vector_push(out, &macro->replacement_list.memory[i]);
+    }
+
+    // TODO: Do recursive substitutions.
+}
+
+// TODO: Token sources don't actually end up in the final tokens, since they are popped back when we call the final push_token.
+//       Add a token source stack to preprocessing tokens, push to it when copying preprocessing tokens out of substitution and finally to the final token.
 // Fully substitutes all macros within the line_vec and pushes the resulting preprocessing tokens into a caller provided vector.
 void macro_substitution(size_t index, preprocessor_state *state, pp_token_vector *out) {
     pp_token_vector *vec = state->line_vec;
     pp_token *tokens = vec->memory;
 
-    // TODO: Function like macros
-    // (Requires some additional state since the call could be across multiple lines)
-
-    // TODO: Refactor this a bunch.
-
     for (; index < vec->size; index++) {
         if (tokens[index].kind == PP_TOK_IDENTIFIER) {
-            define *macro = define_table_lookup(&state->def_table, &tokens[index].data);
-            if (macro && macro->active) {
-                // Add macro source to the stack.
-                token_source *define_source = preprocessor_source_tail(state);
-                define_source->kind = TSRC_MACRO;
-                string_copy(&define_source->macro.name, &macro->define_name);
-                define_source->macro.line = macro->source.line;
-                define_source->macro.column = macro->source.column;
-
+            define *macro = NULL;
+            if ((macro = should_substitute(state, &tokens[index].data, true))) {
                 if (macro_argument_decl_is_empty(&macro->args)) {
-                    // Object like macro!
-                    pp_token_vector temp_buff;
-                    pp_token_vector_init(&temp_buff, 16);
-
-                    // Copy the replacement list and do concatenations.
-                    for (size_t i = 0; i < macro->replacement_list.size; i++) {
-                        if (i < macro->replacement_list.size - 2 && macro->replacement_list.memory[i + 1].kind == PP_TOK_DOUBLEHASH) {
-                            i += 2;
-                            pp_token tmp_tok;
-                            if (!pp_token_concatenate(&tmp_tok, &macro->replacement_list.memory[i - 2], &macro->replacement_list.memory[i])) {
-                                sc_error(false, "Could not concatenate tokens '%s' and '%s'",
-                                         string_data(&macro->replacement_list.memory[i - 2].data),
-                                         string_data(&macro->replacement_list.memory[i].data));
-                                continue;
-                            }
-                            pp_token_vector_push(&temp_buff, &tmp_tok);
-                        }
-                        else pp_token_vector_push(&temp_buff, &macro->replacement_list.memory[i]);
-                    }
-
-                    // TODO: Do more substitutions.
-
-                    for (size_t i = 0; i < temp_buff.size; i++) {
-                        pp_token_vector_push(out, &temp_buff.memory[i]);
-                    }
-
-                    pp_token_vector_destroy(&temp_buff);
+                    object_macro_substitute(state, macro, out);
                 } else {
                     // Function like macro.
+                    // This could be a call across lines, which makes things tricky.
                 }
 
-                // Pop the macro source from the stack.
                 preprocessor_pop_source(state);
                 continue;
             }
