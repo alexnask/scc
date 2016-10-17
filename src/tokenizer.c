@@ -652,6 +652,7 @@ bool pp_token_concatenate(pp_token *dest, pp_token *left, pp_token *right) {
     if (left->kind == PP_TOK_HASH && right->kind == PP_TOK_HASH) {
         dest->kind = PP_TOK_CONCAT_DOUBLEHASH;
         dest->source = left->source;
+        dest->has_whitespace = right->has_whitespace;
         STRING_FROM_LITERAL(&dest->data, "##");
         return true;
     }
