@@ -413,7 +413,6 @@ static void function_macro_substitute(preprocessor_state *state, define *macro, 
         }
     }
 
-    // TODO: Fix object macro substitution rescanning (identifiers from ## should also be substitutable)
     // Ok, we've substituted all our arguments.
     // Here, we will go step by step.
     // We pull tokens from the replacement list, apply the '#' operator and substitute arguments.
@@ -450,7 +449,7 @@ static void function_macro_substitute(preprocessor_state *state, define *macro, 
             size_t arg_index = 0;
             if (get_arg_index(macro, &macro->replacement_list.memory[i], &arg_index)) {
                 // Ok, it's an argument, let's replace with the substituted argument.
-                
+
                 if (out_arguments[arg_index].size > 0 ) for (size_t j = 0; j < out_arguments[arg_index].size; j++) {
                     // I think there is no way a regular doublehash gets here
                     assert(out_arguments[arg_index].memory[j].kind != PP_TOK_DOUBLEHASH);
@@ -578,9 +577,7 @@ static void inline_function_macro_call(preprocessor_state *state, define *macro,
         goto cleanup_return;
     }
 
-    // Skip past the closing parenthesis.
     assert(tokens[*i].kind == PP_TOK_CLOSE_PAREN);
-    (*i)++;
 
     // Did we set all arguments?
     if (current_arg < nargs - 1) {
