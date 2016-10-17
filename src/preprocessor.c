@@ -158,8 +158,11 @@ static void handle_directive(size_t index, preprocessor_state *state) {
             // TODO: ERROR REPORTING
             string str;
             string_init(&str, 0);
-            for (size_t i = 0; i < vec->size; i++) {
+            for (size_t i = index; i < vec->size; i++) {
                 string_append(&str, &tokens[i].data);
+                if (tokens[i].has_whitespace) {
+                    string_push(&str, ' ');
+                }
             }
             sc_error(false, string_data(&str));
             string_destroy(&str);
@@ -231,14 +234,16 @@ static void handle_directive(size_t index, preprocessor_state *state) {
 }
 
 bool preprocess_line(preprocessor_state *state) {
+    state->line_vec->size = 0;
+    bool result = tokenize_line(state->line_vec, state->tok_state);
+
     pp_token_vector *vec = state->line_vec;
     pp_token *tokens = vec->memory;
 
-    vec->size = 0;
-
-    bool result = tokenize_line(state->line_vec, state->tok_state);
-
     size_t idx = 0;
+    if (vec->size == 0) {
+        return result;
+    }
 
     if (tokens[idx].kind == PP_TOK_HASH) {
         // Preprocessor directive.

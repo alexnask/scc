@@ -257,7 +257,6 @@ void do_define(size_t index, preprocessor_state *state) {
                 define_destroy(&new_def);
                 return;
             }
-
             // Skip closing parenthesis
             index++;
         }
