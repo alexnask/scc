@@ -268,14 +268,14 @@ bool preprocess_line(preprocessor_state *state) {
         pp_token_vector_init(&out, 16);
 
         if (state->macro_context.macro != NULL) {
-            continue_multiline_macro_function_call(state, &idx, &out);
+            continue_multiline_macro_function_call(state, &idx, state->line_vec, &out);
             // This skips the closing parenthesis if the function call is over.
             // Otherwise, we are already over the vector size.
             idx++;
         }
 
         if (idx < vec->size) {
-            macro_substitution(idx, state, &out);
+            fully_substitute(idx, state, &out);
         }
 
         for (size_t i = 0; i < out.size; i++) {

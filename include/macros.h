@@ -61,8 +61,8 @@ bool define_exists(define_table *table, string *def_name);
 
 struct preprocessor_state;
 void do_define(size_t index, struct preprocessor_state *state);
-void macro_substitution(size_t index, struct preprocessor_state *state, pp_token_vector *out);
+void fully_substitute(size_t index, struct preprocessor_state *state, pp_token_vector *out);
 
-void continue_multiline_macro_function_call(struct preprocessor_state *state, size_t *index, pp_token_vector *out);
+void continue_multiline_macro_function_call(struct preprocessor_state *state, size_t *index, pp_token_vector *vec, pp_token_vector *out);
 
 #endif

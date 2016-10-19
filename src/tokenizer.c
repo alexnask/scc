@@ -658,6 +658,12 @@ bool pp_token_concatenate(pp_token *dest, pp_token *left, pp_token *right) {
         return true;
     }
 
+    if (left->kind == PP_TOK_NUMBER && right->kind == PP_TOK_NUMBER) {
+        pp_token_copy(dest, left);
+        string_append(&dest->data, &right->data);
+        return true;
+    }
+
     // TODO: Punctuators.
 
     return false;
@@ -667,5 +673,6 @@ void pp_token_copy(pp_token *dest, pp_token *src) {
     dest->kind = src->kind;
     dest->source = src->source;
     dest->has_whitespace = src->has_whitespace;
+    dest->replaceable = src->replaceable;
     string_copy(&dest->data, &src->data);
 }

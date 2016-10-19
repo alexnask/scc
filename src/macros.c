@@ -472,12 +472,18 @@ static void function_macro_substitute(preprocessor_state *state, define *macro, 
         } else if (macro->replacement_list.memory[i].kind == PP_TOK_IDENTIFIER) {
             size_t arg_index = 0;
             if (get_arg_index(macro, &macro->replacement_list.memory[i], &arg_index)) {
-                // Ok, it's an argument, let's replace with the substituted argument.
+                pp_token_vector *substitute_from = &out_arguments[arg_index];
 
-                if (out_arguments[arg_index].size > 0 ) for (size_t j = 0; j < out_arguments[arg_index].size; j++) {
+                // If the next or previous token is '##', we should not substitute the argument with it's original token sequence.
+                if ((i > 0 && macro->replacement_list.memory[i - 1].kind == PP_TOK_DOUBLEHASH) ||
+                    (i < macro->replacement_list.size - 1 && macro->replacement_list.memory[i + 1].kind == PP_TOK_DOUBLEHASH)) {
+                    substitute_from = &arguments[arg_index];
+                }
+                // Ok, it's an argument, let's replace!
+                if (substitute_from->size > 0) for (size_t j = 0; j < substitute_from->size; j++) {
                     // I think there is no way a regular doublehash gets here
-                    assert(out_arguments[arg_index].memory[j].kind != PP_TOK_DOUBLEHASH);
-                    pp_token_vector_push(&temp, &out_arguments[arg_index].memory[j]);
+                    assert(substitute_from->memory[j].kind != PP_TOK_DOUBLEHASH);
+                    pp_token_vector_push(&temp, &substitute_from->memory[j]);
                 } else {
                     // Argument is empty, just output a Placemarker argument.
                     pp_token temp_tok;
@@ -673,10 +679,9 @@ static void object_macro_substitute(preprocessor_state *state, define *macro, pp
     pp_token_vector_destroy(&temp);
 }
 
-void continue_multiline_macro_function_call(preprocessor_state *state, size_t *index, pp_token_vector *out) {
+void continue_multiline_macro_function_call(preprocessor_state *state, size_t *index, pp_token_vector *vec, pp_token_vector *out) {
     assert(state->macro_context.macro != NULL);
 
-    pp_token_vector *vec = state->line_vec;
     pp_token *tokens = vec->memory;
 
     size_t nargs = state->macro_context.macro->args.argument_count;
@@ -748,16 +753,20 @@ void continue_multiline_macro_function_call(preprocessor_state *state, size_t *i
 
 // TODO: Token sources don't actually end up in the final tokens, since they are popped back when we call the final push_token.
 //       Add a token source stack to preprocessing tokens, push to it when copying preprocessing tokens out of substitution and finally to the final token.
-// Fully substitutes all macros within the line_vec and pushes the resulting preprocessing tokens into a caller provided vector.
-void macro_substitution(size_t index, preprocessor_state *state, pp_token_vector *out) {
-    pp_token_vector *vec = state->line_vec;
+//       Also, substituted tokens should always have whitespace.
+// Substitutes all macros within the 'vec' and pushes the resulting preprocessing tokens into a caller provided vector.
+// Returns true if everything was fully substituted
+bool macro_substitution(size_t index, preprocessor_state *state, pp_token_vector *vec, pp_token_vector *out) {
     pp_token *tokens = vec->memory;
+
+    bool substituted = false;
 
     for (; index < vec->size; index++) {
         if (tokens[index].kind == PP_TOK_IDENTIFIER) {
             define *macro = NULL;
             if ((macro = should_substitute(state, &tokens[index], true))) {
                 if (macro_argument_decl_is_empty(&macro->args)) {
+                    substituted = true;
                     object_macro_substitute(state, macro, out);
                 } else {
                     // Function like macro.
@@ -771,6 +780,7 @@ void macro_substitution(size_t index, preprocessor_state *state, pp_token_vector
                         // Just push the token and go on.
                         pp_token_vector_push(out, &tokens[index - 1]);
                     } else {
+                        substituted = true;
                         // Ok, we may have a macro call
                         // Let's update our state.
                         state->macro_context.macro = macro;
@@ -781,7 +791,8 @@ void macro_substitution(size_t index, preprocessor_state *state, pp_token_vector
                         state->macro_context.args = malloc((macro->args.argument_count + (macro->args.has_varargs ? 1 : 0)) * sizeof(pp_token_vector));
                         // We'll initialize those argument vectors as we get to the next argument.
                         // Do what we can on this line.
-                        continue_multiline_macro_function_call(state, &index, out);
+                        continue_multiline_macro_function_call(state, &index, vec, out);
+                        assert(index >= vec->size || tokens[index].kind == PP_TOK_CLOSE_PAREN);
                     }
                 }
 
@@ -792,4 +803,43 @@ void macro_substitution(size_t index, preprocessor_state *state, pp_token_vector
 
         pp_token_vector_push(out, &tokens[index]);
     }
+
+    return !substituted;
+}
+
+// This doesnt work with multiline calls...
+void fully_substitute(size_t index, preprocessor_state *state, pp_token_vector *out) {
+    pp_token_vector *vec = state->line_vec;
+
+    pp_token_vector temp;
+    pp_token_vector_init(&temp, vec->size);
+
+    bool result = macro_substitution(index, state, vec, &temp);
+    if (!result && state->macro_context.macro == NULL) {
+        pp_token_vector temp2;
+        pp_token_vector_init(&temp2, temp.size);
+
+        pp_token_vector *current_in = &temp;
+        pp_token_vector *current_out = &temp2;
+
+        do {
+            result = macro_substitution(0, state, current_in, current_out);
+
+            pp_token_vector *temp = current_in;
+            current_in = current_out;
+            current_out = temp;
+        } while(!result && state->macro_context.macro == NULL);
+
+        for (size_t j = 0; j < current_out->size; j++) {
+            pp_token_vector_push(out, &current_out->memory[j]);
+        }
+
+        pp_token_vector_destroy(&temp2);
+    } else {
+        for (size_t j = 0; j < temp.size; j++) {
+            pp_token_vector_push(out, &temp.memory[j]);
+        }
+    }
+
+    pp_token_vector_destroy(&temp);
 }
