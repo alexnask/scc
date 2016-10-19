@@ -1,6 +1,18 @@
 #ifndef PREPROCESSOR_H__
 #define PREPROCESSOR_H__
 
+/*
+TODO List:
+- Write if, elif etc.
+- Write include.
+- User defined macros.
+- Add a token source stack to pp_tokens, copy it over from the preprocessing state when we push tokens out to output vectors.
+- Write nice error messages (like the tokenizer's) for the preprocessor (using the token source stack).
+
+Future:
+- Rewrite the preprocessor (at least macro handling) to be correct (at least every example of the C11 standard).
+*/
+
 #include <macros.h>
 #include <token_vector.h>
 

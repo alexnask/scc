@@ -751,9 +751,6 @@ void continue_multiline_macro_function_call(preprocessor_state *state, size_t *i
     }
 }
 
-// TODO: Token sources don't actually end up in the final tokens, since they are popped back when we call the final push_token.
-//       Add a token source stack to preprocessing tokens, push to it when copying preprocessing tokens out of substitution and finally to the final token.
-//       Also, substituted tokens should always have whitespace.
 // Substitutes all macros within the 'vec' and pushes the resulting preprocessing tokens into a caller provided vector.
 // Returns true if everything was fully substituted
 bool macro_substitution(size_t index, preprocessor_state *state, pp_token_vector *vec, pp_token_vector *out) {
