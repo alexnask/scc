@@ -269,6 +269,9 @@ bool preprocess_line(preprocessor_state *state) {
 
         if (state->macro_context.macro != NULL) {
             continue_multiline_macro_function_call(state, &idx, &out);
+            // This skips the closing parenthesis if the function call is over.
+            // Otherwise, we are already over the vector size.
+            idx++;
         }
 
         if (idx < vec->size) {

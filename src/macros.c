@@ -3,7 +3,7 @@
 #include <string.h>
 
 bool macro_argument_decl_is_empty(macro_argument_decl *decl) {
-    return decl->argument_count == 0 && !decl->has_varargs;
+    return decl->none;
 }
 
 // Note that we can add elements directly with 'macro_argument_decl_add'.
@@ -12,6 +12,7 @@ void macro_argument_decl_init_empty(macro_argument_decl *decl) {
     decl->argument_count = 0;
     decl->capacity = 0;
     decl->has_varargs = false;
+    decl->none = true;
 }
 
 void macro_argument_decl_init(macro_argument_decl *decl) {
@@ -20,6 +21,7 @@ void macro_argument_decl_init(macro_argument_decl *decl) {
 
     decl->arguments = malloc(decl->capacity * sizeof(string));
     decl->has_varargs = false;
+    decl->none = true;
 }
 
 bool macro_argument_decl_has(macro_argument_decl *decl, string *arg) {
@@ -125,6 +127,7 @@ bool define_exists(define_table *table, string *def_name) {
 static bool macro_defs_compatible(define *left, define *right) {
     assert(left->active && right->active);
     // Simple checks from declarations.
+    if (left->args.none != right->args.none) return false;
     if (left->args.has_varargs != right->args.has_varargs) return false;
     if (left->args.argument_count != right->args.argument_count) return false;
     // Check for spelling of arguments.
@@ -180,6 +183,7 @@ void do_define(size_t index, preprocessor_state *state) {
 
             // Read argument list
             macro_argument_decl *arg_decl = &new_def.args;
+            arg_decl->none = false;
 
             bool first = true;
             while (index < vec->size && tokens[index].kind != PP_TOK_CLOSE_PAREN) {
@@ -408,10 +412,14 @@ static void function_macro_substitute(preprocessor_state *state, define *macro, 
                     }
 
                     preprocessor_pop_source(state);
-                } else pp_token_vector_push(out_arg, &in_toks[j]);
+                } else {
+                    pp_token_vector_push(out_arg, &in_toks[j]);
+                }
             } else if (in_toks[j].kind == PP_TOK_DOUBLEHASH) {
                 // Ok, we don't want to evaluate double hashes from arguments, so we mark them as concatenated here.
                 in_toks[j].kind = PP_TOK_CONCAT_DOUBLEHASH;
+                pp_token_vector_push(out_arg, &in_toks[j]);
+            } else {
                 pp_token_vector_push(out_arg, &in_toks[j]);
             }
         }
@@ -584,7 +592,7 @@ static void inline_function_macro_call(preprocessor_state *state, define *macro,
     assert(tokens[*i].kind == PP_TOK_CLOSE_PAREN);
 
     // Did we set all arguments?
-    if (current_arg < nargs - 1) {
+    if (nargs > 0 && current_arg < nargs) {
         sc_error(false, "Trying to pass too few arguments to function like macro '%s'",
                  string_data(&macro->define_name));
         goto cleanup_return;
@@ -713,7 +721,7 @@ void continue_multiline_macro_function_call(preprocessor_state *state, size_t *i
         assert(tokens[*index].kind == PP_TOK_CLOSE_PAREN);
 
         // Did we set all arguments?
-        if (state->macro_context.current_argument < nargs - 1) {
+        if (nargs > 0 && state->macro_context.current_argument < nargs) {
             sc_error(false, "Trying to pass too few arguments to function like macro '%s'",
                  string_data(&state->macro_context.macro->define_name));
             preprocessor_clean_macro_context(state);
@@ -769,6 +777,7 @@ void macro_substitution(size_t index, preprocessor_state *state, pp_token_vector
                 continue;
             }
         }
+
         pp_token_vector_push(out, &tokens[index]);
     }
 }

@@ -16,6 +16,9 @@ typedef struct macro_argument_decl {
     size_t argument_count;
     bool has_varargs;
     size_t capacity;
+
+    // This is used to differenciate between no arg function like macros and object like macros.
+    bool none;
 } macro_argument_decl;
 
 bool macro_argument_decl_is_empty(macro_argument_decl *decl);
