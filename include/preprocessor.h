@@ -37,11 +37,23 @@ typedef struct preprocessor_state {
         string path;
         size_t line;
     } line;
+
+    // Context for function like macro call across lines.
+    struct {
+        bool opened_call;
+        define *macro;
+        size_t nested_parentheses;
+        size_t current_argument;
+        pp_token *macro_ident;
+        pp_token_vector *args;
+    } macro_context;
 } preprocessor_state;
 
 void preprocessor_state_init(preprocessor_state *state, tokenizer_state *tok_state, token_vector *translation_unit, pp_token_vector *line_vec);
 
 bool preprocess_line(preprocessor_state *state);
+
+void preprocessor_clean_macro_context(preprocessor_state *state);
 
 token_source *preprocessor_source_tail(preprocessor_state *state);
 void preprocessor_pop_source(preprocessor_state *state);

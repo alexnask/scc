@@ -380,7 +380,7 @@ static void function_macro_substitute(preprocessor_state *state, define *macro, 
     pp_token_vector out_arguments[nargs + (variadic ? 1 : 0)];
     // Initialize them!
     for (size_t i = 0; i < nargs + (variadic ? 1 : 0); i++) {
-        pp_token_vector_init(&out_arguments[i], 8);
+        pp_token_vector_init(&out_arguments[i], arguments[i].size);
     }
 
     // Let's do the arguments' substitutions!
@@ -409,7 +409,11 @@ static void function_macro_substitute(preprocessor_state *state, define *macro, 
 
                     preprocessor_pop_source(state);
                 } else pp_token_vector_push(out_arg, &in_toks[j]);
-            } else pp_token_vector_push(out_arg, &in_toks[j]);
+            } else if (in_toks[j].kind == PP_TOK_DOUBLEHASH) {
+                // Ok, we don't want to evaluate double hashes from arguments, so we mark them as concatenated here.
+                in_toks[j].kind = PP_TOK_CONCAT_DOUBLEHASH;
+                pp_token_vector_push(out_arg, &in_toks[j]);
+            }
         }
     }
 
@@ -649,6 +653,79 @@ static void object_macro_substitute(preprocessor_state *state, define *macro, pp
     pp_token_vector_destroy(&temp);
 }
 
+void continue_multiline_macro_function_call(preprocessor_state *state, size_t *index, pp_token_vector *out) {
+    assert(state->macro_context.macro != NULL);
+
+    pp_token_vector *vec = state->line_vec;
+    pp_token *tokens = vec->memory;
+
+    size_t nargs = state->macro_context.macro->args.argument_count;
+    bool variadic = state->macro_context.macro->args.has_varargs;
+
+    if (!state->macro_context.opened_call) {
+        if (tokens[*index].kind != PP_TOK_OPEN_PAREN) {
+            // Ok, not a macro call after all, push the identifier token and cleanup our macro context.
+            pp_token_vector_push(out, state->macro_context.macro_ident);
+            preprocessor_clean_macro_context(state);
+            return;
+        } else {
+            // Ok, call opened up, initialize first argument token vector.
+            state->macro_context.opened_call = true;
+            if (nargs + (variadic ? 1 : 0) > 0) {
+                pp_token_vector_init(&state->macro_context.args[0], 8);
+            }
+            (*index)++;
+        }
+    }
+
+    // Ok, let's consume as much as possible.
+    while (*index < vec->size && (state->macro_context.nested_parentheses != 0 || tokens[*index].kind != PP_TOK_CLOSE_PAREN)) {
+        if (tokens[*index].kind == PP_TOK_OPEN_PAREN) {
+            state->macro_context.nested_parentheses++;
+        } else if (tokens[*index].kind == PP_TOK_CLOSE_PAREN) {
+            state->macro_context.nested_parentheses--;
+        } else if (state->macro_context.nested_parentheses == 0 && tokens[*index].kind == PP_TOK_COMMA) {
+            if (state->macro_context.current_argument < nargs - 1) {
+                state->macro_context.current_argument++;
+                pp_token_vector_init(&state->macro_context.args[state->macro_context.current_argument], 8);
+                (*index)++;
+                continue;
+            } else if (state->macro_context.current_argument == nargs - 1) {
+                if (variadic) {
+                    state->macro_context.current_argument++;
+                    pp_token_vector_init(&state->macro_context.args[state->macro_context.current_argument], 8);
+                    (*index)++;
+                    continue;
+                } else {
+                    sc_error(false, "Trying to pass too many arguments to non variadic function like macro '%s'",
+                             string_data(&state->macro_context.macro->define_name));
+                    preprocessor_clean_macro_context(state);
+                    return;
+                }
+            }
+        }
+
+        pp_token_vector_push(&state->macro_context.args[state->macro_context.current_argument], &tokens[(*index)++]);
+    }
+
+    if (*index < vec->size || (state->macro_context.nested_parentheses == 0 && tokens[*index].kind == PP_TOK_CLOSE_PAREN)) {
+        // We actually stopped before the end of line, our macro function call is over.
+        assert(tokens[*index].kind == PP_TOK_CLOSE_PAREN);
+
+        // Did we set all arguments?
+        if (state->macro_context.current_argument < nargs - 1) {
+            sc_error(false, "Trying to pass too few arguments to function like macro '%s'",
+                 string_data(&state->macro_context.macro->define_name));
+            preprocessor_clean_macro_context(state);
+        }
+
+        // All ok!
+        function_macro_substitute(state, state->macro_context.macro, state->macro_context.args, out);
+        // Cleanup.
+        preprocessor_clean_macro_context(state);
+    }
+}
+
 // TODO: Token sources don't actually end up in the final tokens, since they are popped back when we call the final push_token.
 //       Add a token source stack to preprocessing tokens, push to it when copying preprocessing tokens out of substitution and finally to the final token.
 // Fully substitutes all macros within the line_vec and pushes the resulting preprocessing tokens into a caller provided vector.
@@ -665,6 +742,27 @@ void macro_substitution(size_t index, preprocessor_state *state, pp_token_vector
                 } else {
                     // Function like macro.
                     // This could be a call across lines, which makes things tricky.
+                    // We need some state to signal that we may be in a macro function call and at what point we currently are.
+                    assert(!state->macro_context.opened_call && state->macro_context.macro == NULL);
+                    // Ok, if we have a next token it should be an open parenthesis, otherwise this is not a macro call.
+                    index++;
+                    if (index < vec->size && tokens[index].kind != PP_TOK_OPEN_PAREN) {
+                        // Not a macro call, nevermind!
+                        // Just push the token and go on.
+                        pp_token_vector_push(out, &tokens[index - 1]);
+                    } else {
+                        // Ok, we may have a macro call
+                        // Let's update our state.
+                        state->macro_context.macro = macro;
+                        state->macro_context.nested_parentheses = 0;
+                        state->macro_context.current_argument = 0;
+                        state->macro_context.macro_ident = &tokens[index - 1];
+                        // Let's allocate space for arguments.
+                        state->macro_context.args = malloc((macro->args.argument_count + (macro->args.has_varargs ? 1 : 0)) * sizeof(pp_token_vector));
+                        // We'll initialize those argument vectors as we get to the next argument.
+                        // Do what we can on this line.
+                        continue_multiline_macro_function_call(state, &index, out);
+                    }
                 }
 
                 preprocessor_pop_source(state);

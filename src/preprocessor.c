@@ -241,11 +241,17 @@ bool preprocess_line(preprocessor_state *state) {
     pp_token *tokens = vec->memory;
 
     size_t idx = 0;
+
     if (vec->size == 0) {
         return result;
     }
 
     if (tokens[idx].kind == PP_TOK_HASH) {
+        if (state->macro_context.macro != NULL) {
+            // We're in a macro call, this is an error.
+            sc_error(false, "Malformed function like macro call.");
+            preprocessor_clean_macro_context(state);
+        }
         // Preprocessor directive.
         idx++;
 
@@ -257,11 +263,18 @@ bool preprocess_line(preprocessor_state *state) {
         handle_directive(idx, state);
     } else if (!ignoring(state)) {
         // TODO: Handle _Pragmas
-        // TODO: move this into preprocessor_state, don't create it each time...
+        // TODO: move this token vector into preprocessor_state, don't create it for each line...
         pp_token_vector out;
         pp_token_vector_init(&out, 16);
 
-        macro_substitution(idx, state, &out);
+        if (state->macro_context.macro != NULL) {
+            continue_multiline_macro_function_call(state, &idx, &out);
+        }
+
+        if (idx < vec->size) {
+            macro_substitution(idx, state, &out);
+        }
+
         for (size_t i = 0; i < out.size; i++) {
             push_token(&out.memory[i], state);
         }
@@ -271,6 +284,10 @@ bool preprocess_line(preprocessor_state *state) {
 
     // Increment the "#line" counter on text lines only.
     state->line.line++;
+
+    if (!result && state->macro_context.macro != NULL) {
+        sc_error(false, "Malformed function like macro call.");
+    }
 
     return result;
 }
@@ -339,6 +356,9 @@ void preprocessor_state_init(preprocessor_state *state, tokenizer_state *tok_sta
 
     string_init(&state->line.path, 0);
     state->line.line = 0;
+
+    state->macro_context.opened_call = false;
+    state->macro_context.macro = NULL;
 }
 
 token_source *preprocessor_source_tail(preprocessor_state *state) {
@@ -354,4 +374,21 @@ token_source *preprocessor_source_tail(preprocessor_state *state) {
 void preprocessor_pop_source(preprocessor_state *state) {
     assert(state->source_stack.stack_size > 0);
     state->source_stack.stack_size--;
+}
+
+void preprocessor_clean_macro_context(preprocessor_state *state) {
+    assert(state->macro_context.macro != NULL);
+
+    size_t nargs = state->macro_context.macro->args.argument_count;
+    bool variadic = state->macro_context.macro->args.has_varargs;
+
+    if (state->macro_context.opened_call && nargs + (variadic ? 1 : 0) > 0) {
+        for (size_t i = 0; i <= state->macro_context.current_argument; i++) {
+            pp_token_vector_destroy(&state->macro_context.args[i]);
+        }
+    }
+
+    state->macro_context.macro = NULL;
+    state->macro_context.opened_call = false;
+    free(state->macro_context.args);
 }
