@@ -77,6 +77,7 @@ typedef struct pp_token {
 
     string data;
     bool has_whitespace;
+    bool replaceable;
 } pp_token;
 
 // TODO: Destroy function.

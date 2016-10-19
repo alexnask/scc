@@ -333,13 +333,25 @@ void do_define(size_t index, preprocessor_state *state) {
 // We see if such a macro exists and we aren't already substituting it
 // If peek_stack is set, we look at the top of the source stack for a macro and do not substitute if we have the same name.
 // Otherwise, we are working in a "global context" where we substitute any macro.
-static define *should_substitute(preprocessor_state *state, string *name, bool peek_stack) {
+static define *should_substitute(preprocessor_state *state, pp_token *ident, bool peek_stack) {
+    assert(ident->kind == PP_TOK_IDENTIFIER);
+    if (!ident->replaceable) {
+        return NULL;
+    }
+
+    string *name = &ident->data;
+
     define *macro = define_table_lookup(&state->def_table, name);
     if (macro && macro->active) {
         if (peek_stack && state->source_stack.stack_size > 0) {
-            token_source *top = &state->source_stack.memory[state->source_stack.stack_size - 1];
-            if (top->kind == TSRC_MACRO && string_equals(name, &top->macro.name)) {
-                return NULL;
+            /* Furthermore, if any nested replacements encounter the name of the macro being replaced,
+               it is not replaced. */
+            for (long int i = state->source_stack.stack_size - 1; i >= 0; i--) {
+                token_source *top = &state->source_stack.memory[i];
+                if (top->kind == TSRC_MACRO && string_equals(name, &top->macro.name)) {
+                    ident->replaceable = false;
+                    return NULL;
+                }
             }
         }
 
@@ -397,7 +409,7 @@ static void function_macro_substitute(preprocessor_state *state, define *macro, 
             if (in_toks[j].kind == PP_TOK_IDENTIFIER) {
                 // We may need to substitute, in a global context.
                 define *inside_macro = NULL;
-                if ((inside_macro = should_substitute(state, &in_toks[j].data, false))) {
+                if ((inside_macro = should_substitute(state, &in_toks[j], false))) {
                     if (macro_argument_decl_is_empty(&inside_macro->args)) {
                         object_macro_substitute(state, inside_macro, out_arg);
                     } else {
@@ -511,7 +523,7 @@ static void function_macro_substitute(preprocessor_state *state, define *macro, 
     for (size_t i = 0; i < temp2.size; i++) {
         if (tokens[i].kind == PP_TOK_IDENTIFIER) {
             define *inside_macro = NULL;
-            if ((inside_macro = should_substitute(state, &tokens[i].data, true))) {
+            if ((inside_macro = should_substitute(state, &tokens[i], true))) {
                 if (macro_argument_decl_is_empty(&inside_macro->args)) {
                     object_macro_substitute(state, inside_macro, out);
                 } else {
@@ -592,7 +604,7 @@ static void inline_function_macro_call(preprocessor_state *state, define *macro,
     assert(tokens[*i].kind == PP_TOK_CLOSE_PAREN);
 
     // Did we set all arguments?
-    if (nargs > 0 && current_arg < nargs) {
+    if (nargs > 0 && current_arg < nargs - 1) {
         sc_error(false, "Trying to pass too few arguments to function like macro '%s'",
                  string_data(&macro->define_name));
         goto cleanup_return;
@@ -637,7 +649,7 @@ static void object_macro_substitute(preprocessor_state *state, define *macro, pp
     for (size_t i = 0; i < temp.size; i++) {
         if (tokens[i].kind == PP_TOK_IDENTIFIER) {
             define *inside_macro = NULL;
-            if ((inside_macro = should_substitute(state, &tokens[i].data, true))) {
+            if ((inside_macro = should_substitute(state, &tokens[i], true))) {
                 if (macro_argument_decl_is_empty(&inside_macro->args)) {
                     object_macro_substitute(state, inside_macro, out);
                 } else {
@@ -721,7 +733,7 @@ void continue_multiline_macro_function_call(preprocessor_state *state, size_t *i
         assert(tokens[*index].kind == PP_TOK_CLOSE_PAREN);
 
         // Did we set all arguments?
-        if (nargs > 0 && state->macro_context.current_argument < nargs) {
+        if (nargs > 0 && state->macro_context.current_argument < nargs - 1) {
             sc_error(false, "Trying to pass too few arguments to function like macro '%s'",
                  string_data(&state->macro_context.macro->define_name));
             preprocessor_clean_macro_context(state);
@@ -744,7 +756,7 @@ void macro_substitution(size_t index, preprocessor_state *state, pp_token_vector
     for (; index < vec->size; index++) {
         if (tokens[index].kind == PP_TOK_IDENTIFIER) {
             define *macro = NULL;
-            if ((macro = should_substitute(state, &tokens[index].data, true))) {
+            if ((macro = should_substitute(state, &tokens[index], true))) {
                 if (macro_argument_decl_is_empty(&macro->args)) {
                     object_macro_substitute(state, macro, out);
                 } else {

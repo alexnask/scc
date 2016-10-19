@@ -201,6 +201,7 @@ static void push_token(pp_token_vector *vec, tokenizer_state *state, size_t *pro
         substring(&tok->data, &state->current_data, state->done, state->done + *processed);
     }
 
+    tok->replaceable = true;
     tok->kind = kind;
 
     if (last_token_kind == PP_TOK_HASH && kind == PP_TOK_IDENTIFIER) {
