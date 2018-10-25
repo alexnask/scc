@@ -71,19 +71,27 @@ static void tokenizer_error(size_t index, size_t length, size_t line, size_t col
     // We assume that the numbers are 4 long at maximum
     size_t total_length = strlen(state->path) + 51 + strlen(error) + (end_off + start_off) + (index - start_off) + length;
 
-    char space_buff[start_off + 1];
+    // @TODO: Use an allocator to a statically sized piece of the stack with a fallback to malloc.
+    char region_buffer[1024];
+    sc_region region_state;
+    sc_allocator region_alloc = make_region_alloc(&region_state, region_buffer, 1024);
+
+    sc_fallback fallback_state;
+    sc_allocator fallback_alloc = make_fallback_alloc(&fallback_state, &region_alloc, mallocator());
+
+    char *space_buff = sc_alloc(&fallback_alloc, start_off + 1);
     memset(space_buff, ' ', start_off);
     space_buff[start_off] = '\0';
 
-    char tilde_buff[length + 1];
+    char *tilde_buff = sc_alloc(&fallback_alloc, length + 1);
     memset(tilde_buff, '~', length);
     tilde_buff[length] = '\0';
 
-    char data_piece[end_off + start_off + 1];
+    char *data_piece = sc_alloc(&fallback_alloc, end_off + start_off + 1);
     memcpy(data_piece, error_ptr - start_off, end_off + start_off);
     data_piece[end_off + start_off] = '\0';
 
-    char buff[total_length + 1];
+    char *buff = sc_alloc(&fallback_alloc, total_length + 1);
     snprintf(buff, total_length + 1, "%s:%lu:%lu: Error: %s\n               %s\n               %s%s\n",
              state->path, line, column, error, data_piece, space_buff, tilde_buff);
 
@@ -91,6 +99,15 @@ static void tokenizer_error(size_t index, size_t length, size_t line, size_t col
     buff[total_length] = '\0';
 
     sc_error(false, buff);
+
+    // Free our stuff.
+    sc_free(&fallback_alloc, space_buff);
+    sc_free(&fallback_alloc, tilde_buff);
+    sc_free(&fallback_alloc, data_piece);
+    sc_free(&fallback_alloc, buff);
+
+    sc_destroy_allocator(&fallback_alloc);
+    sc_destroy_allocator(&region_alloc);
 }
 
 // Returns false when we hit EOF.
