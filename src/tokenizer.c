@@ -71,7 +71,6 @@ static void tokenizer_error(size_t index, size_t length, size_t line, size_t col
     // We assume that the numbers are 4 long at maximum
     size_t total_length = strlen(state->path) + 51 + strlen(error) + (end_off + start_off) + (index - start_off) + length;
 
-    // @TODO: Use an allocator to a statically sized piece of the stack with a fallback to malloc.
     char region_buffer[1024];
     sc_region region_state;
     sc_allocator region_alloc = make_region_alloc(&region_state, region_buffer, 1024);
