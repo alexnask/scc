@@ -219,6 +219,7 @@ void do_define(size_t index, preprocessor_state *state) {
                     } else if (tokens[index].has_whitespace || tokens[index + 1].has_whitespace) {
                         sc_error(false, "Whitespace not allowed in vararg parameter declaration of function like macro '%s'.",
                                  string_data(&new_def.define_name));
+                        define_destroy(&new_def);
                         return;
                     } else {
                         if (arg_decl->has_varargs) {
@@ -326,6 +327,8 @@ void do_define(size_t index, preprocessor_state *state) {
             // TODO: ERROR REPORTING
             // Show original definition + new definition.
             sc_error(false, "Incompatible redefinition of macro '%s'", string_data(&new_def.define_name));
+        } else {
+            sc_warning("Redefinition of macro '%s'", string_data(&new_def.define_name));
         }
 
         define_destroy(&new_def);
