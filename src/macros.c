@@ -216,7 +216,11 @@ void do_define(size_t index, preprocessor_state *state) {
                         error = true;
                     } else if (tokens[index + 1].kind != PP_TOK_DOT || tokens[index + 2].kind != PP_TOK_DOT) {
                         error = true;
-                    } else{
+                    } else if (tokens[index].has_whitespace || tokens[index + 1].has_whitespace) {
+                        sc_error(false, "Whitespace not allowed in vararg parameter declaration of function like macro '%s'.",
+                                 string_data(&new_def.define_name));
+                        return;
+                    } else {
                         if (arg_decl->has_varargs) {
                             sc_error(false, "Function like macro's '%s' argument list already contains a varargs parameter.",
                                      string_data(&new_def.define_name));
