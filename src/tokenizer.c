@@ -240,6 +240,8 @@ static void push_token(pp_token_vector *vec, tokenizer_state *state, size_t *pro
     last_token_kind = kind;
 }
 
+// @TODO: We could probably merge this with get_processed_line and push through all the tokens into the vector
+//        for the whole file or a limit set at call site (to then push to the parser without using too much memory).
 bool tokenize_line(pp_token_vector *vec, tokenizer_state *state) {
     size_t original_vec_size = vec->size;
     // Get a processed line.
@@ -249,10 +251,11 @@ bool tokenize_line(pp_token_vector *vec, tokenizer_state *state) {
     const char *data = string_data(&state->current_data);
     size_t processed = 0;
 
+    // When we get whitespace, we update the tokenizer state then add the 'has_whitespace' flag to the last added token.
     #define GOT_WHITESPACE { state->done += processed; state->column_start += processed; processed = 0; \
                             if (vec->size > original_vec_size) { vec->memory[vec->size - 1].has_whitespace = true; } }
 
-    // So, our line is ine "state->current_data"
+    // So, our line is line "state->current_data"
     if (state->in_multiline_comment) {
         // We still are in some multiline comment, skip until we find the end (if we do)
         while (state->done + 1 < line_size) {
@@ -274,6 +277,7 @@ bool tokenize_line(pp_token_vector *vec, tokenizer_state *state) {
         }
     }
 
+    // Helper macros to check that enough characters are left and to get data.
     #define HAS_CHARS(N) (state->done + processed + N < line_size)
     #define DATA(N) (data[state->done + processed + N])
 
